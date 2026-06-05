@@ -1,0 +1,21 @@
+{
+  "description": "3D rigid body physics (Jolt Physics)",
+  "author": "tettou771",
+  "license": "MIT",
+  "category": "physics",
+  "keywords": [
+    "physics",
+    "3d",
+    "jolt",
+    "rigidbody",
+    "collision",
+    "simulation"
+  ],
+  "platforms": [
+    "macos",
+    "windows",
+    "linux",
+    "web"
+  ],
+  "demo_url": "https://tettou771.github.io/tcxPhysics/"
+}
