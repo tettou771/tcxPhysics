@@ -1,5 +1,11 @@
 # tcxPhysics
 
+![cubeRain demo](docs/preview.png)
+
+> ⚠️ **Work in progress.** This addon works, but it's early — **the API may still
+> change without notice** between versions. Pin a commit/tag if you need stability.
+> Feedback welcome. [Live web demo →](https://tettou771.github.io/tcxPhysics/)
+
 3D rigid body physics for [TrussC](https://github.com/TrussC-org/TrussC), powered by
 [Jolt Physics](https://github.com/jrouwe/JoltPhysics) (the engine behind *Horizon
 Forbidden West* and *Death Stranding 2*).

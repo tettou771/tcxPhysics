@@ -17,5 +17,6 @@
     "linux",
     "web"
   ],
+  "screenshot": "docs/preview.png",
   "demo_url": "https://tettou771.github.io/tcxPhysics/"
 }
