@@ -8,6 +8,11 @@ static constexpr int   MAX_BLOCKS    = 4000;
 void tcApp::setup() {
     setWindowTitle("tcxPhysics - cubeRain  (hold mouse to pour cubes)");
 
+    // On touch screens (and the web build on iPad/phones), deliver the first
+    // touch as mouse events so tap-and-hold pours cubes and drag orbits — this
+    // is OFF by default on desktop/web. Without it, taps do nothing.
+    setTouchAsMouse(true);
+
     // Camera looking slightly down at the pile.
     cam.setDistance(440.0f);
     cam.setTarget(0.0f, 50.0f, 0.0f);

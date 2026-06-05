@@ -27,6 +27,10 @@ set(ENABLE_ALL_WARNINGS     OFF CACHE BOOL "" FORCE)
 # Don't let Jolt stomp on the global CXX flags TrussC already set; build it with
 # the toolchain's normal flags (RTTI/exceptions on) so it integrates cleanly.
 set(OVERRIDE_CXX_FLAGS      OFF CACHE BOOL "" FORCE)
+# MSVC: Jolt defaults to the STATIC runtime (/MT) while TrussC + the app use the
+# DYNAMIC runtime (/MD). Mismatched CRTs cause LNK2038 "RuntimeLibrary mismatch".
+# Force Jolt onto the dynamic runtime to match.
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
 # Emscripten: build Jolt with wasm SIMD (128-bit). This is where most of Jolt's
 # native-class throughput on the web comes from — without it the math drops to
 # scalar and roughly halves.
