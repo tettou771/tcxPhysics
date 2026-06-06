@@ -8,6 +8,11 @@ static constexpr int   MAX_BLOCKS    = 4000;
 void tcApp::setup() {
     setWindowTitle("tcxPhysics - cubeRain  (hold mouse to pour cubes)");
 
+    // Build stamp — printed to the JS console so we can tell which build a
+    // browser actually loaded (cache busting / deploy verification).
+    logNotice() << "tcxPhysics cubeRain | build " __DATE__ " " __TIME__
+                << " | devicePixelRatio-sensitive HUD";
+
     // On touch screens (and the web build on iPad/phones), deliver the first
     // touch as mouse events so tap-and-hold pours cubes and drag orbits — this
     // is OFF by default on desktop/web. Without it, taps do nothing.

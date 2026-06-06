@@ -90,7 +90,17 @@ jobs:
           link = ('<a href="https://github.com/tettou771/tcxPhysics" target="_blank" '
                   'style="position:absolute;top:8px;right:10px;z-index:10;color:#aaa;'
                   'font-family:sans-serif;font-size:12px;text-decoration:none">tcxPhysics ↗</a>')
-          html = html.replace('<body>', '<body>' + link, 1)
+          # On-device console: append ?debug to the URL to load eruda (an
+          # on-screen JS console). Lets us read logs/errors on iPad/iPhone with
+          # no Mac. Off by default so normal visitors never see it.
+          debug = ('<script>if(/[?&]debug/.test(location.search)){'
+                   'var s=document.createElement("script");'
+                   's.src="https://cdn.jsdelivr.net/npm/eruda";'
+                   's.onload=function(){eruda.init();'
+                   'console.log("devicePixelRatio="+window.devicePixelRatio+'
+                   '" inner="+innerWidth+"x"+innerHeight);};'
+                   'document.head.appendChild(s);}</script>')
+          html = html.replace('<body>', '<body>' + link + debug, 1)
           html = html.replace('{{{ TITLE }}}', 'tcxPhysics — cubeRain (Jolt Physics)')
           open(dst, 'w').write(html)
           print('index.html assembled')
