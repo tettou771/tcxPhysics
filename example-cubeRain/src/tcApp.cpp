@@ -84,8 +84,10 @@ void tcApp::draw() {
     cam.begin();
     setCameraPosition(cam.getPosition());  // needed for correct PBR specular
 
-    // The blocks.
-    setMaterial(blockMat);
+    // [WEB-TEST] Draw cubes UNLIT (flat color, no PBR material) to check whether
+    // the PBR render pipeline is what iOS Safari WebGPU rejects. If cubes appear
+    // on tap on iPad with this, PBR is confirmed as the culprit.
+    setColor(0.93f, 0.45f, 0.12f);
     for (const PhysicsBody& b : blocks) {
         if (!b.isValid()) continue;
         Vec3 size = b.getSize();
@@ -96,7 +98,6 @@ void tcApp::draw() {
         unitCube.draw();
         popMatrix();
     }
-    clearMaterial();
 
     cam.end();
 
