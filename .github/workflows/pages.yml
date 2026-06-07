@@ -55,9 +55,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: TrussC/addons/tcxPhysics/example-cubeRain/build-web
-          key: pages-webbuild-${{ hashFiles('CMakeLists.txt') }}-${{ hashFiles('src/**') }}
+          key: pages-webbuild-emsdk5.0.4-${{ hashFiles('CMakeLists.txt') }}-${{ hashFiles('src/**') }}
           restore-keys: |
-            pages-webbuild-${{ hashFiles('CMakeLists.txt') }}-
+            pages-webbuild-emsdk5.0.4-${{ hashFiles('CMakeLists.txt') }}-
 
       - name: Configure & build (Emscripten / WebGPU)
         working-directory: TrussC/addons/tcxPhysics/example-cubeRain
