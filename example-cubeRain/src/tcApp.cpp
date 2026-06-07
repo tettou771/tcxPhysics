@@ -38,16 +38,18 @@ void tcApp::setup() {
     env.loadProcedural();
     setEnvironment(env);
 
-    // Key light: warm, from front-above. Fill: cool, from the other side.
+    // [WEB-TEST] Direct lights DISABLED — rely on IBL only (like pbrSpheres,
+    // which renders fine on iOS). If PBR now works on iOS, the direct-light PBR
+    // pipeline is the Safari blocker.
     keyLight.setDirectional(Vec3(-0.4f, -1.0f, -0.6f));
     keyLight.setDiffuse(1.0f, 0.95f, 0.88f);
     keyLight.setIntensity(2.6f);
-    addLight(keyLight);
+    // addLight(keyLight);
 
     fillLight.setDirectional(Vec3(0.6f, -0.3f, 0.5f));
-    fillLight.setDiffuse(0.5f, 0.5f, 0.55f);  // near-neutral, faint cool tint
+    fillLight.setDiffuse(0.5f, 0.5f, 0.55f);
     fillLight.setIntensity(0.45f);
-    addLight(fillLight);
+    // addLight(fillLight);
 
     // Physics: punchy gravity so blocks fall at a lively pace at this scale.
     world.setup(MAX_BLOCKS + 16);
@@ -84,10 +86,11 @@ void tcApp::draw() {
     cam.begin();
     setCameraPosition(cam.getPosition());  // needed for correct PBR specular
 
-    // [WEB-TEST] Draw cubes UNLIT (flat color, no PBR material) to check whether
-    // the PBR render pipeline is what iOS Safari WebGPU rejects. If cubes appear
-    // on tap on iPad with this, PBR is confirmed as the culprit.
-    setColor(0.93f, 0.45f, 0.12f);
+    // [WEB-TEST] PBR but IBL-only (direct lights removed in setup). pbrSpheres
+    // renders on iOS with IBL-only PBR, while our direct-light PBR crashed
+    // Safari's createRenderPipeline — so this tests whether the direct-light PBR
+    // pipeline specifically is the iOS blocker.
+    setMaterial(blockMat);
     for (const PhysicsBody& b : blocks) {
         if (!b.isValid()) continue;
         Vec3 size = b.getSize();
@@ -98,6 +101,7 @@ void tcApp::draw() {
         unitCube.draw();
         popMatrix();
     }
+    clearMaterial();
 
     cam.end();
 
