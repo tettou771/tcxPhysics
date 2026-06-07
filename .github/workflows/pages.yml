@@ -43,7 +43,10 @@ jobs:
       - name: Setup Emscripten
         uses: mymindstorm/setup-emsdk@v14
         with:
-          version: latest
+          # Pinned to 5.0.4 (matches local dev). emscripten 6.0.0's emdawnwebgpu
+          # runtime triggers "wgpu: device lost" on iOS/iPadOS Safari WebGPU
+          # (black screen after one frame); 5.0.4 runs fine there.
+          version: 5.0.4
           actions-cache-folder: emsdk-cache
 
       # Cache the example's web build dir so Jolt's wasm objects (FetchContent
