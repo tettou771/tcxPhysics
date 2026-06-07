@@ -49,16 +49,10 @@ jobs:
           version: 5.0.4
           actions-cache-folder: emsdk-cache
 
-      # Cache the example's web build dir so Jolt's wasm objects (FetchContent
-      # _deps) survive across runs — keyed on the Jolt tag in CMakeLists.txt.
-      - name: Cache web build
-        uses: actions/cache@v4
-        with:
-          path: TrussC/addons/tcxPhysics/example-cubeRain/build-web
-          key: pages-webbuild-emsdk5.0.4-${{ hashFiles('CMakeLists.txt') }}-${{ hashFiles('src/**') }}
-          restore-keys: |
-            pages-webbuild-emsdk5.0.4-${{ hashFiles('CMakeLists.txt') }}-
-
+      # NOTE: no build cache. Caching the whole build-web dir proved fragile
+      # (a GitHub cache-service hiccup left a partial CMake state and broke the
+      # configure). This deploy only runs on src/CMakeLists changes, so a clean
+      # build (a few minutes) each time is an acceptable trade for reliability.
       - name: Configure & build (Emscripten / WebGPU)
         working-directory: TrussC/addons/tcxPhysics/example-cubeRain
         run: |
