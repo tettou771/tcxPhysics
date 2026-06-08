@@ -9,8 +9,9 @@ using namespace tc;
 using namespace tcx;
 
 // cubeRain - hold the mouse to pour ~100 small cubes per second into a 3D pile.
-// Apple-red, lightly glossy blocks lit by a key + fill light, with a live cube
-// count and FPS in the top-left.
+// Carrot-orange blocks lit by a key + fill light, with a live cube count and FPS
+// in the top-left. Direct lighting only (no IBL) so the look is identical on
+// every platform — IBL is auto-skipped on iOS Safari anyway (see Environment).
 class tcApp : public App {
 public:
     void setup() override;
@@ -25,10 +26,9 @@ private:
     PhysicsWorld world;
 
     Mesh unitCube;        // a 1x1x1 box, scaled per body when drawn
-    Material blockMat;    // matte apple-red
+    Material blockMat;    // matte carrot-orange
     Light keyLight;
     Light fillLight;
-    Environment env;
 
     std::vector<PhysicsBody> blocks;
 

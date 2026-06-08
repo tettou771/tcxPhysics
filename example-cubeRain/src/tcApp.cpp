@@ -33,23 +33,20 @@ void tcApp::setup() {
             .setMetallic(0.0f)
             .setRoughness(0.5f);
 
-    // Procedural environment gives soft image-based ambient so shadowed faces
-    // don't go pure black — the "CG look".
-    env.loadProcedural();
-    setEnvironment(env);
-
-    // [WEB-TEST] Direct lights DISABLED — rely on IBL only (like pbrSpheres,
-    // which renders fine on iOS). If PBR now works on iOS, the direct-light PBR
-    // pipeline is the Safari blocker.
+    // Direct lighting only — no IBL/Environment, so the look is identical on
+    // every platform (IBL is auto-skipped on iOS Safari regardless). A strong
+    // fill stands in for the missing image-based ambient so shadowed faces stay
+    // readable instead of going near-black.
+    // Key light: warm, from front-above. Fill: from the other side, brighter.
     keyLight.setDirectional(Vec3(-0.4f, -1.0f, -0.6f));
     keyLight.setDiffuse(1.0f, 0.95f, 0.88f);
     keyLight.setIntensity(2.6f);
-    // addLight(keyLight);
+    addLight(keyLight);
 
     fillLight.setDirectional(Vec3(0.6f, -0.3f, 0.5f));
-    fillLight.setDiffuse(0.5f, 0.5f, 0.55f);
-    fillLight.setIntensity(0.45f);
-    // addLight(fillLight);
+    fillLight.setDiffuse(0.6f, 0.6f, 0.65f);  // near-neutral, faint cool tint
+    fillLight.setIntensity(1.1f);
+    addLight(fillLight);
 
     // Physics: punchy gravity so blocks fall at a lively pace at this scale.
     world.setup(MAX_BLOCKS + 16);
@@ -86,10 +83,7 @@ void tcApp::draw() {
     cam.begin();
     setCameraPosition(cam.getPosition());  // needed for correct PBR specular
 
-    // [WEB-TEST] PBR but IBL-only (direct lights removed in setup). pbrSpheres
-    // renders on iOS with IBL-only PBR, while our direct-light PBR crashed
-    // Safari's createRenderPipeline — so this tests whether the direct-light PBR
-    // pipeline specifically is the iOS blocker.
+    // The blocks.
     setMaterial(blockMat);
     for (const PhysicsBody& b : blocks) {
         if (!b.isValid()) continue;
