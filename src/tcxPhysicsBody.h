@@ -34,6 +34,36 @@ public:
     // The underlying Jolt body id (index+sequence packed into a uint32).
     uint32_t getId() const { return id_; }
 
+    // --- dynamics (only meaningful for dynamic bodies) -----------------------
+    // World-space. Forces accumulate and apply over the next step; impulses
+    // change velocity immediately. The body is auto-woken. All chainable.
+    const PhysicsBody& applyForce(const tc::Vec3& force) const;
+    const PhysicsBody& applyForce(const tc::Vec3& force, const tc::Vec3& worldPoint) const;
+    const PhysicsBody& applyTorque(const tc::Vec3& torque) const;
+    const PhysicsBody& applyImpulse(const tc::Vec3& impulse) const;
+    const PhysicsBody& applyImpulse(const tc::Vec3& impulse, const tc::Vec3& worldPoint) const;
+    const PhysicsBody& applyAngularImpulse(const tc::Vec3& angularImpulse) const;
+
+    const PhysicsBody& setLinearVelocity(const tc::Vec3& v) const;
+    tc::Vec3 getLinearVelocity() const;
+    const PhysicsBody& setAngularVelocity(const tc::Vec3& v) const;
+    tc::Vec3 getAngularVelocity() const;
+
+    // Teleport — snaps the transform, bypassing the collision sweep. Use for
+    // spawning / resetting, not for driving motion (use velocity for that).
+    const PhysicsBody& setPosition(const tc::Vec3& p) const;
+    const PhysicsBody& setRotation(const tc::Quaternion& q) const;
+
+    // --- material ------------------------------------------------------------
+    const PhysicsBody& setFriction(float friction) const;        // 0 = ice, ~1 = grippy
+    float getFriction() const;
+    const PhysicsBody& setRestitution(float restitution) const;  // 0 = dead, 1 = full bounce
+    float getRestitution() const;
+
+    // --- activation ----------------------------------------------------------
+    const PhysicsBody& activate() const;   // wake a sleeping body
+    bool isActive() const;
+
 private:
     PhysicsWorld* world_ = nullptr;
     uint32_t id_ = kInvalidId;

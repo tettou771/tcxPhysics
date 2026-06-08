@@ -89,6 +89,9 @@ cube count and FPS readout.
 | `removeBody(body)` | Remove one body. |
 | `clearDynamicBodies()` | Remove every dynamic body, keep static scenery. |
 | `getNumBodies()` | Total body count. |
+| `updateAsyncStart(hz = 120)` / `updateAsyncStop()` / `isAsync()` | Step on a fixed-timestep clock — see [Async stepping](#async-stepping). |
+| `contactBegan` / `contactEnded` | `tc::Event<ContactEventArgs>` — see [Contact events](#contact-events). |
+| `nativeSystem()` / `nativeBodyInterface()` | Raw Jolt pointers (`void*`) — see [Advanced: raw Jolt](#advanced-raw-jolt-escape-hatch). |
 
 `dynamic = false` makes a body static (floor, walls, scenery) — it never moves
 but everything collides against it.
@@ -96,7 +99,7 @@ but everything collides against it.
 ### `PhysicsBody`
 
 A lightweight copyable handle (world pointer + id). It owns nothing; the body
-lives in the `PhysicsWorld`.
+lives in the `PhysicsWorld`. The setters return `*this`, so they chain.
 
 | Method | What it does |
 |--------|--------------|
@@ -104,6 +107,120 @@ lives in the `PhysicsWorld`.
 | `getPosition()` → `Vec3` | World-space center. |
 | `getRotation()` → `Quaternion` | World-space orientation (feed to `rotate()`). |
 | `getSize()` → `Vec3` | Full extents of the shape's bounding box. |
+| `applyForce(f)` / `applyForce(f, worldPoint)` | Accumulating push (world-space), applied over the next step. |
+| `applyTorque(t)` | Accumulating spin. |
+| `applyImpulse(i)` / `applyImpulse(i, worldPoint)` | One-shot kick (changes velocity instantly). |
+| `applyAngularImpulse(i)` | One-shot spin kick. |
+| `setLinearVelocity(v)` / `getLinearVelocity()` | Direct linear velocity. |
+| `setAngularVelocity(v)` / `getAngularVelocity()` | Direct angular velocity. |
+| `setPosition(p)` / `setRotation(q)` | Teleport (snaps transform, no collision sweep — for spawn/reset). |
+| `setFriction(f)` / `getFriction()` | `0` = ice, `~1` = grippy. |
+| `setRestitution(r)` / `getRestitution()` | `0` = dead, `1` = full bounce. |
+| `activate()` / `isActive()` | Wake / query a sleeping body. |
+
+Forces, impulses and velocity are no-ops on non-dynamic bodies, and they wake the
+body for you. Example: `example-forces/` (impulse + force) and `example-bounce/`
+(restitution side by side).
+
+---
+
+## Contact events
+
+Subscribe to collisions with the `tc::Event`s on `PhysicsWorld`. Handlers fire on
+the **main thread** — `tcxPhysics` collects Jolt's worker-thread contacts and
+replays them during `update()` (or, in async mode, on the frame loop) — so it's
+safe to touch app / render state from inside one.
+
+```cpp
+EventListener onHit;   // keep it alive (RAII; disconnects on destroy)
+
+void setup() override {
+    onHit = world.contactBegan.listen([](ContactEventArgs& c) {
+        // c.a, c.b      : the two bodies (copyable handles)
+        // c.point       : world-space contact point
+        // c.normal      : world-space normal (a → b)
+        // c.speed       : approach speed at impact — great for hit sfx/vfx volume
+        playClick(c.speed);
+    });
+}
+```
+
+`contactEnded` fires when a pair stops touching (its `point`/`normal`/`speed` are
+zero — only the body pair is meaningful). Example: `example-collision/`.
+
+---
+
+## Async stepping
+
+By default you step the sim yourself with `update(dt)`. Alternatively, run it on
+its own fixed-timestep clock so physics stays stable regardless of frame rate:
+
+```cpp
+world.updateAsyncStart(240);   // background thread stepping at 240 Hz
+// ...don't call update() while async; body reads / force calls stay safe...
+world.updateAsyncStop();
+```
+
+Reads and force/velocity calls are serialized against the step, so they remain
+safe while the worker runs. Contact events still fire on the main thread.
+
+**Web:** WebAssembly has no background threads, so async transparently falls back
+to fixed-timestep stepping driven by the frame loop (logged once as a warning) —
+same API, no code change. Example: `example-async/`.
+
+---
+
+## Advanced: raw Jolt (escape hatch)
+
+The wrapper covers the common cases; for anything it doesn't surface yet
+(constraints/joints, ray & shape casts, custom shapes, damping, …) reach straight
+into Jolt:
+
+```cpp
+#include <tcxPhysics.h>
+#include <tcxPhysicsJolt.h>          // opt in to raw Jolt
+
+JPH::BodyInterface& bi = joltBodyInterface(world);
+bi.SetLinearDamping(joltBodyId(myBody), 0.2f);   // a feature not wrapped
+JPH::PhysicsSystem& sys = joltSystem(world);      // constraints, queries, settings…
+```
+
+Two things this costs you (both by design — it's why the default build is clean):
+
+1. **Build.** Jolt is linked `PRIVATE` to the addon, so its headers and `JPH_*`
+   compile defines don't reach your app. To use the hatch your app must link the
+   same `Jolt` target — one line, ideally in a committed **`local.cmake`** so it
+   survives `trusscli update`:
+
+   ```cmake
+   # local.cmake
+   if(TARGET Jolt)
+       target_link_libraries(${PROJECT_NAME} PRIVATE Jolt)
+   endif()
+   ```
+
+   Linking the *same* target guarantees headers **and** defines match — mismatched
+   `JPH_*` defines silently change struct layouts (ABI breakage).
+
+2. **Threading.** These calls go straight to Jolt and bypass the step lock. With
+   synchronous `update()` you're fine (main thread, between steps); in async mode
+   call `updateAsyncStop()` first (or take your own lock).
+
+Full working example: **`example-joltNativeAccess/`** — builds a ball-jointed
+hanging chain using Jolt constraints, with the `local.cmake` shown above.
+
+---
+
+## Examples
+
+| Example | Shows |
+|---------|-------|
+| `example-cubeRain/` | The headline demo — pour cubes into a pile. |
+| `example-forces/` | `applyImpulse` / `applyForce` / velocity (click to explode, hold to levitate). |
+| `example-bounce/` | `setRestitution` / `setFriction` — a row of spheres, dead → bouncy. |
+| `example-collision/` | `contactBegan` events — flash + spark + count on impact. |
+| `example-async/` | `updateAsyncStart` — frame-rate-independent stepping (inject a hitch to compare). |
+| `example-joltNativeAccess/` | The raw-Jolt escape hatch — a constraint-based chain. |
 
 ---
 

@@ -8,6 +8,23 @@
 namespace tcx {
 
 // =============================================================================
+// ContactEventArgs - payload for PhysicsWorld::contactBegan / contactEnded.
+//
+// A value snapshot built on the MAIN thread right after the step (Jolt detects
+// contacts on worker threads; we buffer them and replay them safely here). The
+// two bodies are copyable handles, so a listener may freely read transforms,
+// apply impulses, queue removals, etc.
+// =============================================================================
+struct ContactEventArgs {
+    PhysicsBody a;        // the two bodies in contact (handles; always safe to copy)
+    PhysicsBody b;
+    tc::Vec3 point;       // world-space contact point (set on contactBegan; zero on ended)
+    tc::Vec3 normal;      // world-space contact normal, from a toward b (began only)
+    float speed = 0.0f;   // relative approach speed along the normal at impact
+                          // (began only) — handy for impact sound / vfx intensity
+};
+
+// =============================================================================
 // PhysicsWorld - owns the Jolt simulation and acts as a factory for bodies.
 //
 // Lifecycle:
@@ -43,7 +60,38 @@ public:
 
     // Advance the simulation by dt seconds. collisionSteps subdivides the step
     // for stability at large dt (1 is fine for ~60fps).
+    //
+    // Use this OR the async stepping below — not both. While async is running,
+    // update() is ignored (with a warning).
     void update(float dt = 1.0f / 60.0f, int collisionSteps = 1);
+
+    // --- stepping mode -------------------------------------------------------
+    // By default you drive the sim yourself with update(dt) once per frame.
+    //
+    // Alternatively, run the simulation on its own fixed-timestep clock so the
+    // physics stays stable independent of frame rate / hitches:
+    //   world.updateAsyncStart(120);   // step at 120 Hz on a background thread
+    //   ...
+    //   world.updateAsyncStop();
+    // Body reads and force/velocity calls stay safe while async runs — they are
+    // serialized against the step. Collision events still fire on the MAIN
+    // thread (drained on the frame loop), so handlers can touch app state.
+    //
+    // Web (wasm) has no background threads: async there transparently falls back
+    // to fixed-timestep stepping driven by the frame loop (events().update),
+    // logged once as a warning. Same API, no code change needed.
+    void updateAsyncStart(float hz = 120.0f);
+    void updateAsyncStop();
+    bool isAsync() const;
+
+    // --- collision events ----------------------------------------------------
+    // Fired on the MAIN thread (inside update(), or — in async mode — on the
+    // frame's events().update) so handlers can safely touch app / render state
+    // even though Jolt detects contacts on worker threads.
+    //
+    //   listener = world.contactBegan.listen([](ContactEventArgs& c){ ... });
+    tc::Event<ContactEventArgs> contactBegan;  // two bodies started touching
+    tc::Event<ContactEventArgs> contactEnded;  // two bodies stopped touching
 
     // --- body factory --------------------------------------------------------
     // dynamic = true  -> falls and collides (a thrown block)
@@ -59,12 +107,54 @@ public:
     void clearDynamicBodies();
     int getNumBodies() const;
 
-    // --- queried by PhysicsBody (you rarely call these directly) -------------
+    // --- queried / driven by PhysicsBody (you rarely call these directly) ----
+    // PhysicsBody forwards to these; all are serialized against the step so they
+    // stay safe while async stepping runs.
     tc::Vec3 getBodyPosition(uint32_t id) const;
     tc::Quaternion getBodyRotation(uint32_t id) const;
     tc::Vec3 getBodySize(uint32_t id) const;
 
+    void applyForceToBody(uint32_t id, const tc::Vec3& force);
+    void applyForceToBody(uint32_t id, const tc::Vec3& force, const tc::Vec3& worldPoint);
+    void applyTorqueToBody(uint32_t id, const tc::Vec3& torque);
+    void applyImpulseToBody(uint32_t id, const tc::Vec3& impulse);
+    void applyImpulseToBody(uint32_t id, const tc::Vec3& impulse, const tc::Vec3& worldPoint);
+    void applyAngularImpulseToBody(uint32_t id, const tc::Vec3& angularImpulse);
+
+    void setBodyLinearVelocity(uint32_t id, const tc::Vec3& v);
+    tc::Vec3 getBodyLinearVelocity(uint32_t id) const;
+    void setBodyAngularVelocity(uint32_t id, const tc::Vec3& v);
+    tc::Vec3 getBodyAngularVelocity(uint32_t id) const;
+
+    void setBodyPosition(uint32_t id, const tc::Vec3& p);
+    void setBodyRotation(uint32_t id, const tc::Quaternion& q);
+
+    void setBodyFriction(uint32_t id, float friction);
+    float getBodyFriction(uint32_t id) const;
+    void setBodyRestitution(uint32_t id, float restitution);
+    float getBodyRestitution(uint32_t id) const;
+
+    void activateBody(uint32_t id);
+    bool isBodyActive(uint32_t id) const;
+
+    // --- escape hatch (advanced) ---------------------------------------------
+    // Raw pointers to the underlying Jolt objects, as void* so this header stays
+    // Jolt-free. Don't cast these by hand — include <tcxPhysicsJolt.h> for typed
+    // accessors (joltSystem(world) / joltBodyInterface(world)). Both are null
+    // before setup(). Direct Jolt calls BYPASS the step lock: in async mode,
+    // updateAsyncStop() first (or do your own locking).
+    void* nativeSystem() const;          // -> JPH::PhysicsSystem*
+    void* nativeBodyInterface() const;   // -> JPH::BodyInterface*
+
 private:
+    // Drain worker-collected contacts and fire contactBegan/Ended (main thread).
+    void dispatchContacts();
+#ifdef __EMSCRIPTEN__
+    void webAsyncTick();   // fixed-timestep step driven by the frame loop
+#else
+    void asyncLoop();      // background-thread fixed-timestep loop
+#endif
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
