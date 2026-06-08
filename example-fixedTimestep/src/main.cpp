@@ -3,7 +3,7 @@
 int main() {
     tc::WindowSettings settings;
     settings.setSize(1000, 700);
-    settings.setTitle("tcxPhysics - async");
+    settings.setTitle("tcxPhysics - fixedTimestep");
 
     return TC_RUN_APP(tcApp, settings);
 }

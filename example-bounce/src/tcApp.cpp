@@ -1,15 +1,28 @@
 #include "tcApp.h"
 
-static constexpr int   COUNT   = 7;       // number of spheres in the row
-static constexpr float RADIUS  = 18.0f;
-static constexpr float SPACING = 60.0f;
-static constexpr float DROP_Y  = 320.0f;  // start height
+// Metre-scale: spheres ~0.15 m radius dropped from 3 m under default gravity.
+static constexpr int   COUNT   = 7;
+static constexpr float RADIUS  = 0.15f;
+static constexpr float SPACING = 0.5f;
+static constexpr float DROP_Y  = 3.0f;
+
+// A faint reference grid on the ground plane (y = 0).
+static void drawFloorGrid(float halfExtent, float step) {
+    setColor(0.25f, 0.27f, 0.30f);
+    for (float a = -halfExtent; a <= halfExtent + 0.001f; a += step) {
+        drawLine(Vec3(a, 0.0f, -halfExtent), Vec3(a, 0.0f, halfExtent));
+        drawLine(Vec3(-halfExtent, 0.0f, a), Vec3(halfExtent, 0.0f, a));
+    }
+}
 
 void tcApp::setup() {
     setWindowTitle("tcxPhysics - bounce  (restitution 0 .. 0.9, click to re-drop)");
 
-    cam.setDistance(560.0f);
-    cam.setTarget(0.0f, 120.0f, 0.0f);
+    // Fairly low, slightly-raised view so the different bounce heights line up.
+    cam.setTarget(0.0f, 0.9f, 0.0f);
+    cam.setDistance(5.5f);
+    cam.setAzimuth(0.5f);
+    cam.setElevation(0.22f);
     cam.enableMouseInput();
 
     unitSphere = createSphere(1.0f, 20);
@@ -24,8 +37,7 @@ void tcApp::setup() {
     fillLight.setIntensity(1.1f);
     addLight(fillLight);
 
-    world.setup();
-    world.setGravity(Vec3(0.0f, -600.0f, 0.0f));
+    world.setup();                 // default gravity -9.81
     world.addGroundPlane(0.0f);
 
     float off = (COUNT - 1) * SPACING * 0.5f;
@@ -70,6 +82,8 @@ void tcApp::draw() {
     cam.begin();
     setCameraPosition(cam.getPosition());
 
+    drawFloorGrid(2.5f, 0.5f);
+
     for (Ball& b : balls) {
         if (!b.body.isValid()) continue;
         setMaterial(b.mat);
@@ -85,8 +99,6 @@ void tcApp::draw() {
 
     cam.end();
 
-    // Legend: restitution value under each column would need projection; keep it
-    // simple with a 2D readout.
     setColor(1.0f);
     string line = "restitution (left -> right): ";
     for (int i = 0; i < COUNT; ++i) {

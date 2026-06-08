@@ -449,7 +449,7 @@ void PhysicsWorld::dispatchContacts() {
     }
 }
 
-PhysicsBody PhysicsWorld::addBox(const Vec3& position, const Vec3& size, bool dynamic) {
+PhysicsBody PhysicsWorld::addBox(const Vec3& position, const Vec3& size, bool dynamic, float density) {
     if (!impl_->initialized) return PhysicsBody();
 
     JPH::Vec3 half(std::max(0.001f, size.x * 0.5f),
@@ -460,6 +460,7 @@ PhysicsBody PhysicsWorld::addBox(const Vec3& position, const Vec3& size, bool dy
     float convexRadius = std::min(JPH::cDefaultConvexRadius, minHalf * 0.5f);
 
     JPH::BoxShapeSettings shapeSettings(half, convexRadius);
+    shapeSettings.SetDensity(std::max(0.0001f, density));
     JPH::ShapeSettings::ShapeResult result = shapeSettings.Create();
     if (result.HasError()) {
         logError() << "tcxPhysics: box shape error: " << result.GetError().c_str();
@@ -479,10 +480,11 @@ PhysicsBody PhysicsWorld::addBox(const Vec3& position, const Vec3& size, bool dy
     return PhysicsBody(this, id.GetIndexAndSequenceNumber());
 }
 
-PhysicsBody PhysicsWorld::addSphere(const Vec3& position, float radius, bool dynamic) {
+PhysicsBody PhysicsWorld::addSphere(const Vec3& position, float radius, bool dynamic, float density) {
     if (!impl_->initialized) return PhysicsBody();
 
     JPH::SphereShapeSettings shapeSettings(std::max(0.001f, radius));
+    shapeSettings.SetDensity(std::max(0.0001f, density));
     JPH::ShapeSettings::ShapeResult result = shapeSettings.Create();
     if (result.HasError()) {
         logError() << "tcxPhysics: sphere shape error: " << result.GetError().c_str();
@@ -621,6 +623,24 @@ void PhysicsWorld::applyAngularImpulseToBody(uint32_t id, const Vec3& i) {
     if (!isDynamicLocked(impl_->bodies(), bid)) return;
     impl_->bodies().ActivateBody(bid);
     impl_->bodies().AddAngularImpulse(bid, JPH::Vec3(i.x, i.y, i.z));
+}
+
+void PhysicsWorld::addVelocityToBody(uint32_t id, const Vec3& dv) {
+    if (!impl_->initialized || id == PhysicsBody::kInvalidId) return;
+    TC_LOCK_GUARD(impl_->simMutex);
+    JPH::BodyID bid(id);
+    if (impl_->bodies().GetMotionType(bid) == JPH::EMotionType::Static) return;
+    impl_->bodies().ActivateBody(bid);
+    impl_->bodies().AddLinearVelocity(bid, JPH::Vec3(dv.x, dv.y, dv.z));
+}
+
+float PhysicsWorld::getBodyMass(uint32_t id) const {
+    if (!impl_->initialized || id == PhysicsBody::kInvalidId) return 0.0f;
+    TC_LOCK_GUARD(impl_->simMutex);
+    JPH::RefConst<JPH::Shape> shape = impl_->bodies().GetShape(JPH::BodyID(id));
+    if (shape == nullptr) return 0.0f;
+    // Mass the shape's density implies (we set that density at creation).
+    return shape->GetMassProperties().mMass;
 }
 
 void PhysicsWorld::setBodyLinearVelocity(uint32_t id, const Vec3& v) {

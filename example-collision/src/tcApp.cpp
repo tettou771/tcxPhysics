@@ -1,16 +1,28 @@
 #include "tcApp.h"
 
+// Metre-scale: cubes ~0.2 m raining onto the floor under default gravity.
 static constexpr int   MAX_BLOCKS = 120;
-static constexpr float BOX        = 20.0f;
-static constexpr float SPEED_REF  = 400.0f;  // approach speed that maps to a full flash
+static constexpr float BOX        = 0.2f;
+static constexpr float SPEED_REF  = 6.0f;   // approach speed (m/s) that maps to a full flash
 
 static float clamp01(float v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+
+// A faint reference grid on the ground plane (y = 0).
+static void drawFloorGrid(float halfExtent, float step) {
+    setColor(0.25f, 0.27f, 0.30f);
+    for (float a = -halfExtent; a <= halfExtent + 0.001f; a += step) {
+        drawLine(Vec3(a, 0.0f, -halfExtent), Vec3(a, 0.0f, halfExtent));
+        drawLine(Vec3(-halfExtent, 0.0f, a), Vec3(halfExtent, 0.0f, a));
+    }
+}
 
 void tcApp::setup() {
     setWindowTitle("tcxPhysics - collision  (contact events: flash + spark + count)");
 
-    cam.setDistance(520.0f);
-    cam.setTarget(0.0f, 60.0f, 0.0f);
+    cam.setTarget(0.0f, 0.5f, 0.0f);
+    cam.setDistance(6.0f);
+    cam.setAzimuth(0.6f);
+    cam.setElevation(0.4f);
     cam.enableMouseInput();
 
     unitCube = createBox(1.0f);
@@ -25,8 +37,7 @@ void tcApp::setup() {
     fillLight.setIntensity(1.1f);
     addLight(fillLight);
 
-    world.setup(MAX_BLOCKS + 16);
-    world.setGravity(Vec3(0.0f, -600.0f, 0.0f));
+    world.setup(MAX_BLOCKS + 16);   // default gravity -9.81
     world.addGroundPlane(0.0f);
 
     // Subscribe to contacts. The handler runs on the MAIN thread (tcxPhysics
@@ -44,7 +55,7 @@ void tcApp::spawnBurst(int n) {
         idToIndex.clear();
     }
     for (int i = 0; i < n; ++i) {
-        Vec3 pos(random(-90.0f, 90.0f), random(220.0f, 320.0f), random(-90.0f, 90.0f));
+        Vec3 pos(random(-0.9f, 0.9f), random(2.5f, 3.5f), random(-0.9f, 0.9f));
         Block blk;
         blk.body = world.addBox(pos, Vec3(BOX, BOX, BOX));
         blk.body.setRestitution(0.3f);
@@ -90,6 +101,8 @@ void tcApp::draw() {
     cam.begin();
     setCameraPosition(cam.getPosition());
 
+    drawFloorGrid(2.5f, 0.5f);
+
     Material mat;
     mat.setMetallic(0.0f).setRoughness(0.5f);
     for (const Block& b : blocks) {
@@ -111,10 +124,9 @@ void tcApp::draw() {
     Material sparkMat;
     sparkMat.setMetallic(0.0f).setRoughness(0.2f);
     for (const Spark& s : sparks) {
-        float k = s.life * (0.4f + 0.6f * s.strength);
         sparkMat.setBaseColor(1.0f, 0.9f, 0.5f);
         setMaterial(sparkMat);
-        float sz = 6.0f + 14.0f * s.strength * s.life;
+        float sz = 0.03f + 0.12f * s.strength * s.life;
         pushMatrix();
         translate(s.pos);
         scale(sz, sz, sz);

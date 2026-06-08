@@ -37,6 +37,7 @@ private:
     Light fillLight;
 
     std::vector<PhysicsBody> blocks;
-    bool levitate = false;     // space held → upward force each frame
+    std::vector<Vec3> startPos;   // initial stack layout, for reset (r)
+    bool levitate = false;        // space held → upward force each frame
     float lastTime = 0.0f;
 };

@@ -44,6 +44,14 @@ public:
     const PhysicsBody& applyImpulse(const tc::Vec3& impulse, const tc::Vec3& worldPoint) const;
     const PhysicsBody& applyAngularImpulse(const tc::Vec3& angularImpulse) const;
 
+    // Mass-independent kick: directly adds to the velocity (Δv), ignoring mass.
+    // Often the most intuitive way to "shove" something — you think in units/sec,
+    // not in mass * impulse. Same effect on a heavy and a light body.
+    const PhysicsBody& addVelocity(const tc::Vec3& dv) const;
+
+    // Mass in the sim's units (= density * volume; default density 1000).
+    float getMass() const;
+
     const PhysicsBody& setLinearVelocity(const tc::Vec3& v) const;
     tc::Vec3 getLinearVelocity() const;
     const PhysicsBody& setAngularVelocity(const tc::Vec3& v) const;

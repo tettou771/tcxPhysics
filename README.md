@@ -36,18 +36,20 @@ class tcApp : public App {
     vector<PhysicsBody> blocks;
 
     void setup() override {
-        cam.setDistance(440);
+        // Metre-scale scene (see "Units & scale"): default gravity -9.81 is natural.
+        cam.setTarget(0, 0.5f, 0);
+        cam.setDistance(5);
+        cam.setElevation(0.4f);               // oblique 3/4 view
         cam.enableMouseInput();
         cube = createBox(1.0f);
 
         world.setup();
-        world.setGravity(Vec3(0, -400, 0));   // punchy gravity for this scale
         world.addGroundPlane(0.0f);           // static floor at y = 0
     }
 
     void update() override {
-        // drop a block each frame
-        blocks.push_back(world.addBox(Vec3(random(-40, 40), 220, 0), Vec3(10)));
+        // drop a ~0.2 m block each frame
+        blocks.push_back(world.addBox(Vec3(random(-0.5f, 0.5f), 3, 0), Vec3(0.2f)));
         world.update(1.0f / 60.0f);           // step the simulation
     }
 
@@ -83,8 +85,8 @@ cube count and FPS readout.
 | `setup(maxBodies = 10240)` | Initialize the simulation. Call once. |
 | `setGravity(Vec3)` / `getGravity()` | Gravity vector (default `(0, -9.81, 0)`). |
 | `update(dt = 1/60, collisionSteps = 1)` | Step the simulation once per frame. |
-| `addBox(pos, size, dynamic = true)` | Add a box. `size` is full extents; `pos` is its center. Returns a `PhysicsBody`. |
-| `addSphere(pos, radius, dynamic = true)` | Add a sphere. |
+| `addBox(pos, size, dynamic = true, density = 1000)` | Add a box. `size` is full extents; `pos` is its center. `mass = density × volume`. Returns a `PhysicsBody`. |
+| `addSphere(pos, radius, dynamic = true, density = 1000)` | Add a sphere. |
 | `addGroundPlane(y = 0, size = 100000)` | A large static floor centered on `(0, y, 0)`. |
 | `removeBody(body)` | Remove one body. |
 | `clearDynamicBodies()` | Remove every dynamic body, keep static scenery. |
@@ -111,6 +113,8 @@ lives in the `PhysicsWorld`. The setters return `*this`, so they chain.
 | `applyTorque(t)` | Accumulating spin. |
 | `applyImpulse(i)` / `applyImpulse(i, worldPoint)` | One-shot kick (changes velocity instantly). |
 | `applyAngularImpulse(i)` | One-shot spin kick. |
+| `addVelocity(dv)` | Mass-independent kick: adds straight to the velocity (Δv). The intuitive "shove" — think in units/sec, not mass × impulse. |
+| `getMass()` → `float` | Mass in sim units (`density × volume`). |
 | `setLinearVelocity(v)` / `getLinearVelocity()` | Direct linear velocity. |
 | `setAngularVelocity(v)` / `getAngularVelocity()` | Direct angular velocity. |
 | `setPosition(p)` / `setRotation(q)` | Teleport (snaps transform, no collision sweep — for spawn/reset). |
@@ -166,7 +170,7 @@ safe while the worker runs. Contact events still fire on the main thread.
 
 **Web:** WebAssembly has no background threads, so async transparently falls back
 to fixed-timestep stepping driven by the frame loop (logged once as a warning) —
-same API, no code change. Example: `example-async/`.
+same API, no code change. Example: `example-fixedTimestep/`.
 
 ---
 
@@ -216,20 +220,32 @@ hanging chain using Jolt constraints, with the `local.cmake` shown above.
 | Example | Shows |
 |---------|-------|
 | `example-cubeRain/` | The headline demo — pour cubes into a pile. |
-| `example-forces/` | `applyImpulse` / `applyForce` / velocity (click to explode, hold to levitate). |
+| `example-forces/` | `applyImpulse` / `applyForce` / `addVelocity` (click to explode, hold to levitate, V to jump). |
 | `example-bounce/` | `setRestitution` / `setFriction` — a row of spheres, dead → bouncy. |
 | `example-collision/` | `contactBegan` events — flash + spark + count on impact. |
-| `example-async/` | `updateAsyncStart` — frame-rate-independent stepping (inject a hitch to compare). |
+| `example-fixedTimestep/` | `updateAsyncStart` — a fixed 240 Hz step keeps a tall stack solid; per-frame (capped to 30 fps) wobbles and topples. |
 | `example-joltNativeAccess/` | The raw-Jolt escape hatch — a constraint-based chain. |
 
 ---
 
-## Units & gravity
+## Units & scale
 
-Jolt is unit-agnostic — it simulates in whatever units you feed it. The default
-gravity is the physical `-9.81`, which looks *very slow* in a typical TrussC
-scene where objects are tens of units across. For lively motion, scale gravity
-up (the example uses `-400`), or work in smaller world units.
+Jolt is unit-agnostic, but tcxPhysics leans into a **metre / kilogram / second**
+convention so the numbers feel real and you don't have to guess:
+
+- **Gravity** defaults to the physical `-9.81` (an *acceleration* — mass-independent).
+- **Mass** = `density × volume`, and `density` defaults to **1000** (water, kg/m³).
+  So a `0.3 m` cube weighs ~27 kg.
+- **Velocity** is units/second; a body at `v = 1` crosses one unit per second.
+
+Practical upshot: **build at roughly metre scale** — boxes a few tenths of a unit,
+camera a handful of units back — and gravity, masses and impulses all behave like
+the real world. (The examples follow this; if you instead work at a "tens of units"
+pixel scale, raise gravity or use a smaller `density` to compensate.)
+
+Forces vs. velocity: `applyImpulse`/`applyForce` scale with mass (`impulse = mass × Δv`,
+so use `getMass()`); `addVelocity` and `setLinearVelocity` are mass-independent and
+usually the most intuitive way to move something.
 
 ---
 

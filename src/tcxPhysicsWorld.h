@@ -97,8 +97,13 @@ public:
     // dynamic = true  -> falls and collides (a thrown block)
     // dynamic = false -> never moves (floor, walls, static scenery)
     // size is the FULL box size (w, h, d); position is its center.
-    PhysicsBody addBox(const tc::Vec3& position, const tc::Vec3& size, bool dynamic = true);
-    PhysicsBody addSphere(const tc::Vec3& position, float radius, bool dynamic = true);
+    //
+    // mass = density * volume. The default density is 1000 (water, kg/m^3) — so
+    // build at roughly METRE scale and the numbers feel real: a 0.3 m cube weighs
+    // ~27 kg, default gravity -9.81 looks natural. (Jolt is unit-agnostic; 1000
+    // is its native default. See the README on scale.)
+    PhysicsBody addBox(const tc::Vec3& position, const tc::Vec3& size, bool dynamic = true, float density = 1000.0f);
+    PhysicsBody addSphere(const tc::Vec3& position, float radius, bool dynamic = true, float density = 1000.0f);
     // A large flat static box acting as the ground, centered on (0, y, 0).
     PhysicsBody addGroundPlane(float y = 0.0f, float size = 100000.0f);
 
@@ -120,6 +125,9 @@ public:
     void applyImpulseToBody(uint32_t id, const tc::Vec3& impulse);
     void applyImpulseToBody(uint32_t id, const tc::Vec3& impulse, const tc::Vec3& worldPoint);
     void applyAngularImpulseToBody(uint32_t id, const tc::Vec3& angularImpulse);
+    void addVelocityToBody(uint32_t id, const tc::Vec3& dv);
+
+    float getBodyMass(uint32_t id) const;
 
     void setBodyLinearVelocity(uint32_t id, const tc::Vec3& v);
     tc::Vec3 getBodyLinearVelocity(uint32_t id) const;

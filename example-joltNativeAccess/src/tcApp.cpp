@@ -1,16 +1,26 @@
 #include "tcApp.h"
 
 // The escape hatch: raw Jolt access for the constraint API the wrapper doesn't
-// expose. Including this pulls in Jolt headers (see CMakeLists.txt — we link the
+// expose. Including this pulls in Jolt headers (see local.cmake — we link the
 // addon's Jolt target so headers + JPH_* defines match).
 #include <tcxPhysicsJolt.h>
 #include <Jolt/Physics/Constraints/PointConstraint.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 
+// Metre-scale chain.
 static constexpr int   LINKS = 9;
-static constexpr float BOX   = 18.0f;
-static constexpr float GAP   = 30.0f;   // centre-to-centre spacing of links
-static constexpr float TOP_Y = 360.0f;
+static constexpr float BOX   = 0.18f;
+static constexpr float GAP   = 0.26f;   // centre-to-centre spacing of links
+static constexpr float TOP_Y = 2.6f;
+
+// A faint reference grid on the ground plane (y = 0).
+static void drawFloorGrid(float halfExtent, float step) {
+    setColor(0.25f, 0.27f, 0.30f);
+    for (float a = -halfExtent; a <= halfExtent + 0.001f; a += step) {
+        drawLine(Vec3(a, 0.0f, -halfExtent), Vec3(a, 0.0f, halfExtent));
+        drawLine(Vec3(-halfExtent, 0.0f, a), Vec3(halfExtent, 0.0f, a));
+    }
+}
 
 // Pin two bodies together with a ball joint at a world-space point, using the
 // raw Jolt PhysicsSystem reached via the escape hatch.
@@ -32,10 +42,12 @@ static void ballJoint(PhysicsWorld& world, const PhysicsBody& a, const PhysicsBo
 }
 
 void tcApp::setup() {
-    setWindowTitle("tcxPhysics - jolt escape hatch  (ball-jointed chain via raw Jolt)");
+    setWindowTitle("tcxPhysics - joltNativeAccess  (ball-jointed chain via raw Jolt)");
 
-    cam.setDistance(640.0f);
-    cam.setTarget(0.0f, 180.0f, 0.0f);
+    cam.setTarget(0.0f, 1.3f, 0.0f);
+    cam.setDistance(5.5f);
+    cam.setAzimuth(0.6f);
+    cam.setElevation(0.22f);
     cam.enableMouseInput();
 
     unitCube = createBox(1.0f);
@@ -52,8 +64,7 @@ void tcApp::setup() {
     fillLight.setIntensity(1.1f);
     addLight(fillLight);
 
-    world.setup();
-    world.setGravity(Vec3(0.0f, -500.0f, 0.0f));
+    world.setup();                 // default gravity -9.81
 
     // Static anchor at the top (dynamic = false).
     anchor = world.addBox(Vec3(0.0f, TOP_Y, 0.0f), Vec3(BOX, BOX, BOX), false);
@@ -85,6 +96,8 @@ void tcApp::draw() {
 
     cam.begin();
     setCameraPosition(cam.getPosition());
+
+    drawFloorGrid(2.5f, 0.5f);
 
     auto drawBody = [&](const PhysicsBody& b) {
         if (!b.isValid()) return;
@@ -119,7 +132,7 @@ void tcApp::draw() {
 
 void tcApp::mousePressed(Vec2 pos, int button) {
     (void)pos; (void)button;
-    // Wrapper-side impulse on the bottom link to set it swinging.
+    // Set it swinging — a mass-independent kick on the bottom link.
     if (!links.empty() && links.back().isValid())
-        links.back().applyImpulse(Vec3(60000.0f, 0.0f, 0.0f));
+        links.back().addVelocity(Vec3(2.5f, 0.0f, 0.0f));
 }

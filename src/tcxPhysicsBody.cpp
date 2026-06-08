@@ -52,6 +52,16 @@ const PhysicsBody& PhysicsBody::applyAngularImpulse(const tc::Vec3& angularImpul
     return *this;
 }
 
+const PhysicsBody& PhysicsBody::addVelocity(const tc::Vec3& dv) const {
+    if (isValid()) world_->addVelocityToBody(id_, dv);
+    return *this;
+}
+
+float PhysicsBody::getMass() const {
+    if (!isValid()) return 0.0f;
+    return world_->getBodyMass(id_);
+}
+
 const PhysicsBody& PhysicsBody::setLinearVelocity(const tc::Vec3& v) const {
     if (isValid()) world_->setBodyLinearVelocity(id_, v);
     return *this;
