@@ -174,7 +174,14 @@ public:
     void* nativeSystem() const;          // -> JPH::PhysicsSystem*
     void* nativeBodyInterface() const;   // -> JPH::BodyInterface*
 
+    // Lifetime token: holders (e.g. RigidBody nodes) keep a weak_ptr and check it
+    // before calling removeBody() in their destructor. At shutdown the world may be
+    // destroyed before its bodies' owners; when the token has expired, the world
+    // (and all its bodies) is already gone, so skip the removeBody.
+    std::weak_ptr<int> aliveToken() const { return alive_; }
+
 private:
+    std::shared_ptr<int> alive_ = std::make_shared<int>(0);
     // Drain worker-collected contacts and fire contactBegan/Ended (main thread).
     void dispatchContacts();
 #ifdef __EMSCRIPTEN__
