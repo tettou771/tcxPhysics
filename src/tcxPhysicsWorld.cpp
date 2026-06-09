@@ -12,6 +12,10 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
+#include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/CylinderShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/Body.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
@@ -501,6 +505,144 @@ PhysicsBody PhysicsWorld::addSphere(const Vec3& position, float radius, bool dyn
         bcs, dynamic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
     if (id.IsInvalid()) return PhysicsBody();
     if (dynamic) impl_->dynamicBodies.push_back(id);
+    return PhysicsBody(this, id.GetIndexAndSequenceNumber());
+}
+
+PhysicsBody PhysicsWorld::addCapsule(const Vec3& position, float radius, float cylinderHeight,
+                                     bool dynamic, float density) {
+    if (!impl_->initialized) return PhysicsBody();
+
+    JPH::CapsuleShapeSettings shapeSettings(std::max(0.001f, cylinderHeight * 0.5f),
+                                            std::max(0.001f, radius));
+    shapeSettings.SetDensity(std::max(0.0001f, density));
+    JPH::ShapeSettings::ShapeResult result = shapeSettings.Create();
+    if (result.HasError()) {
+        logError() << "tcxPhysics: capsule shape error: " << result.GetError().c_str();
+        return PhysicsBody();
+    }
+
+    JPH::BodyCreationSettings bcs(
+        result.Get(), toJolt(position), JPH::Quat::sIdentity(),
+        dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
+        dynamic ? Layers::MOVING : Layers::NON_MOVING);
+
+    TC_LOCK_GUARD(impl_->simMutex);
+    JPH::BodyID id = impl_->bodies().CreateAndAddBody(
+        bcs, dynamic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+    if (id.IsInvalid()) return PhysicsBody();
+    if (dynamic) impl_->dynamicBodies.push_back(id);
+    return PhysicsBody(this, id.GetIndexAndSequenceNumber());
+}
+
+PhysicsBody PhysicsWorld::addCylinder(const Vec3& position, float radius, float height,
+                                      bool dynamic, float density) {
+    if (!impl_->initialized) return PhysicsBody();
+
+    float halfH = std::max(0.001f, height * 0.5f);
+    float r = std::max(0.001f, radius);
+    // Convex radius must be <= the smaller of half-height and radius.
+    float convexRadius = std::min(JPH::cDefaultConvexRadius, std::min(halfH, r) * 0.5f);
+
+    JPH::CylinderShapeSettings shapeSettings(halfH, r, convexRadius);
+    shapeSettings.SetDensity(std::max(0.0001f, density));
+    JPH::ShapeSettings::ShapeResult result = shapeSettings.Create();
+    if (result.HasError()) {
+        logError() << "tcxPhysics: cylinder shape error: " << result.GetError().c_str();
+        return PhysicsBody();
+    }
+
+    JPH::BodyCreationSettings bcs(
+        result.Get(), toJolt(position), JPH::Quat::sIdentity(),
+        dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
+        dynamic ? Layers::MOVING : Layers::NON_MOVING);
+
+    TC_LOCK_GUARD(impl_->simMutex);
+    JPH::BodyID id = impl_->bodies().CreateAndAddBody(
+        bcs, dynamic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+    if (id.IsInvalid()) return PhysicsBody();
+    if (dynamic) impl_->dynamicBodies.push_back(id);
+    return PhysicsBody(this, id.GetIndexAndSequenceNumber());
+}
+
+PhysicsBody PhysicsWorld::addConvexHull(const Vec3& position, const Mesh& mesh,
+                                        bool dynamic, float density) {
+    if (!impl_->initialized) return PhysicsBody();
+
+    const std::vector<Vec3>& verts = mesh.getVertices();
+    if (verts.size() < 4) {
+        logError() << "tcxPhysics: addConvexHull needs at least 4 points.";
+        return PhysicsBody();
+    }
+    JPH::Array<JPH::Vec3> points;
+    points.reserve(verts.size());
+    for (const Vec3& v : verts) points.push_back(JPH::Vec3(v.x, v.y, v.z));
+
+    JPH::ConvexHullShapeSettings shapeSettings(points);
+    shapeSettings.SetDensity(std::max(0.0001f, density));
+    JPH::ShapeSettings::ShapeResult result = shapeSettings.Create();
+    if (result.HasError()) {
+        logError() << "tcxPhysics: convex hull error: " << result.GetError().c_str();
+        return PhysicsBody();
+    }
+
+    JPH::BodyCreationSettings bcs(
+        result.Get(), toJolt(position), JPH::Quat::sIdentity(),
+        dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
+        dynamic ? Layers::MOVING : Layers::NON_MOVING);
+
+    TC_LOCK_GUARD(impl_->simMutex);
+    JPH::BodyID id = impl_->bodies().CreateAndAddBody(
+        bcs, dynamic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+    if (id.IsInvalid()) return PhysicsBody();
+    if (dynamic) impl_->dynamicBodies.push_back(id);
+    return PhysicsBody(this, id.GetIndexAndSequenceNumber());
+}
+
+PhysicsBody PhysicsWorld::addMesh(const Vec3& position, const Mesh& mesh, bool dynamic) {
+    if (!impl_->initialized) return PhysicsBody();
+    if (dynamic) {
+        logWarning() << "tcxPhysics: addMesh is static-only (Jolt mesh shapes carry no "
+                        "mass) — creating it static.";
+    }
+
+    const std::vector<Vec3>& verts = mesh.getVertices();
+    const std::vector<unsigned int>& inds = mesh.getIndices();
+
+    JPH::VertexList vlist;
+    vlist.reserve(verts.size());
+    for (const Vec3& v : verts) vlist.push_back(JPH::Float3(v.x, v.y, v.z));
+
+    JPH::IndexedTriangleList tris;
+    if (!inds.empty()) {
+        tris.reserve(inds.size() / 3);
+        for (size_t i = 0; i + 2 < inds.size(); i += 3)
+            tris.push_back(JPH::IndexedTriangle((JPH::uint32)inds[i], (JPH::uint32)inds[i + 1],
+                                                (JPH::uint32)inds[i + 2], 0));
+    } else {
+        // Non-indexed mesh: every 3 vertices form a triangle.
+        for (JPH::uint32 i = 0; i + 2 < (JPH::uint32)verts.size(); i += 3)
+            tris.push_back(JPH::IndexedTriangle(i, i + 1, i + 2, 0));
+    }
+    if (vlist.empty() || tris.empty()) {
+        logError() << "tcxPhysics: addMesh got an empty / triangle-less mesh.";
+        return PhysicsBody();
+    }
+
+    JPH::MeshShapeSettings shapeSettings(vlist, tris);
+    JPH::ShapeSettings::ShapeResult result = shapeSettings.Create();
+    if (result.HasError()) {
+        logError() << "tcxPhysics: mesh shape error: " << result.GetError().c_str();
+        return PhysicsBody();
+    }
+
+    // Mesh shapes are always static.
+    JPH::BodyCreationSettings bcs(
+        result.Get(), toJolt(position), JPH::Quat::sIdentity(),
+        JPH::EMotionType::Static, Layers::NON_MOVING);
+
+    TC_LOCK_GUARD(impl_->simMutex);
+    JPH::BodyID id = impl_->bodies().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
+    if (id.IsInvalid()) return PhysicsBody();
     return PhysicsBody(this, id.GetIndexAndSequenceNumber());
 }
 

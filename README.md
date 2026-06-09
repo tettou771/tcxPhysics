@@ -87,6 +87,10 @@ cube count and FPS readout.
 | `update(dt = 1/60, collisionSteps = 1)` | Step the simulation once per frame. |
 | `addBox(pos, size, dynamic = true, density = 1000)` | Add a box. `size` is full extents; `pos` is its center. `mass = density × volume`. Returns a `PhysicsBody`. |
 | `addSphere(pos, radius, dynamic = true, density = 1000)` | Add a sphere. |
+| `addCapsule(pos, radius, cylinderHeight, dynamic = true, density = 1000)` | Y-axis capsule (cylinder + 2 hemispheres). Draw with `createCapsule(radius, cylinderHeight)`. |
+| `addCylinder(pos, radius, height, dynamic = true, density = 1000)` | Y-axis cylinder. Draw with `createCylinder(radius, height)`. |
+| `addConvexHull(pos, mesh, dynamic = true, density = 1000)` | Convex hull of a mesh's **vertices** (triangles/concavity ignored). For arbitrary *convex* dynamic bodies. |
+| `addMesh(pos, mesh, dynamic = false)` | Triangle-mesh collider — **any geometry incl. concave**, but **static only** (no mass). For terrain / level scenery. |
 | `addGroundPlane(y = 0, size = 100000)` | A large static floor centered on `(0, y, 0)`. |
 | `removeBody(body)` | Remove one body. |
 | `clearDynamicBodies()` | Remove every dynamic body, keep static scenery. |
@@ -125,6 +129,25 @@ lives in the `PhysicsWorld`. The setters return `*this`, so they chain.
 Forces, impulses and velocity are no-ops on non-dynamic bodies, and they wake the
 body for you. Example: `example-forces/` (impulse + force) and `example-bounce/`
 (restitution side by side).
+
+---
+
+## Shapes
+
+The collider and the rendered mesh are **separate** — `getSize()` returns the
+shape's local **AABB**, which only equals the drawable size for box/sphere. Draw
+each shape with the matching mesh:
+
+| Collider | Draw with |
+|----------|-----------|
+| `addBox` / `addSphere` | a unit `createBox`/`createSphere` scaled by `getSize()` |
+| `addCapsule(r, h)` / `addCylinder(r, h)` | `createCapsule(r, h)` / `createCylinder(r, h)` |
+| `addConvexHull(mesh)` / `addMesh(mesh)` | the **same `tc::Mesh`** you passed in |
+
+Convex vs. mesh: `addConvexHull` is light and can be **dynamic**, but rounds the
+input to its convex hull. `addMesh` keeps arbitrary (incl. concave) geometry but
+is **static only**. To move a concave shape, approximate it with one hull or a set
+of hulls (convex decomposition). See `example-shapes/`.
 
 ---
 
@@ -220,6 +243,7 @@ hanging chain using Jolt constraints, with the `local.cmake` shown above.
 | Example | Shows |
 |---------|-------|
 | `example-cubeRain/` | The headline demo — pour cubes into a pile. |
+| `example-shapes/` | Every shape (box/sphere/capsule/cylinder/convex-hull) raining onto a static triangle-mesh terrain. |
 | `example-forces/` | `applyImpulse` / `applyForce` / `addVelocity` (click to explode, hold to levitate, V to jump). |
 | `example-bounce/` | `setRestitution` / `setFriction` — a row of spheres, dead → bouncy. |
 | `example-collision/` | `contactBegan` events — flash + spark + count on impact. |

@@ -104,6 +104,26 @@ public:
     // is its native default. See the README on scale.)
     PhysicsBody addBox(const tc::Vec3& position, const tc::Vec3& size, bool dynamic = true, float density = 1000.0f);
     PhysicsBody addSphere(const tc::Vec3& position, float radius, bool dynamic = true, float density = 1000.0f);
+
+    // A capsule aligned to the Y axis: a cylinder of `cylinderHeight` capped by
+    // two hemispheres of `radius` (total height = cylinderHeight + 2*radius).
+    // Draw it with tc::createCapsule(radius, cylinderHeight). Great for characters.
+    PhysicsBody addCapsule(const tc::Vec3& position, float radius, float cylinderHeight, bool dynamic = true, float density = 1000.0f);
+    // A cylinder aligned to the Y axis. Draw with tc::createCylinder(radius, height).
+    PhysicsBody addCylinder(const tc::Vec3& position, float radius, float height, bool dynamic = true, float density = 1000.0f);
+
+    // A convex body built as the convex hull of a mesh's vertices. Use for
+    // arbitrary *convex* dynamic shapes (gems, dice, rocks). The mesh is only
+    // sampled for its points — keep your own copy to draw. Concave detail is lost
+    // (it's the hull); for concave geometry use addMesh (static).
+    PhysicsBody addConvexHull(const tc::Vec3& position, const tc::Mesh& mesh, bool dynamic = true, float density = 1000.0f);
+
+    // A triangle-mesh body for arbitrary (incl. concave) geometry — terrain,
+    // level scenery. STATIC ONLY: Jolt can't make a mesh shape dynamic (no mass
+    // properties), so `dynamic` is ignored with a warning if true. Draw the same
+    // mesh yourself at the body's transform.
+    PhysicsBody addMesh(const tc::Vec3& position, const tc::Mesh& mesh, bool dynamic = false);
+
     // A large flat static box acting as the ground, centered on (0, y, 0).
     PhysicsBody addGroundPlane(float y = 0.0f, float size = 100000.0f);
 
