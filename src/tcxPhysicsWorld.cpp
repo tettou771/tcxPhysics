@@ -19,6 +19,9 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/Body.h>
 #include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Collision/ObjectLayerPairFilterMask.h>
+#include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayerInterfaceMask.h>
+#include <Jolt/Physics/Collision/BroadPhase/ObjectVsBroadPhaseLayerFilterMask.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
@@ -63,65 +66,15 @@ namespace tcx {
 // ---------------------------------------------------------------------------
 namespace {
 
-// Two object layers: static scenery vs. moving bodies. Static never collides
-// with static, which is most of the broadphase savings.
-namespace Layers {
-    static constexpr JPH::ObjectLayer NON_MOVING = 0;
-    static constexpr JPH::ObjectLayer MOVING     = 1;
-    static constexpr JPH::ObjectLayer NUM_LAYERS = 2;
+// Collision filtering uses Jolt's group/mask scheme: each body's ObjectLayer
+// packs an 8-bit GROUP (which layers it belongs to) and an 8-bit MASK (which
+// groups it collides with). Two bodies collide iff
+// (groupA & maskB) && (groupB & maskA). The wrapper exposes this as
+// setCollisionLayer(0..7) (single membership bit) + setCollisionMask(bits).
+// One broadphase layer holds everything — fine at creative-coding body counts.
+inline JPH::ObjectLayer defaultObjectLayer() {
+    return JPH::ObjectLayerPairFilterMask::sGetObjectLayer(0x01, 0xff);
 }
-
-namespace BroadPhaseLayers {
-    static constexpr JPH::BroadPhaseLayer NON_MOVING(0);
-    static constexpr JPH::BroadPhaseLayer MOVING(1);
-    static constexpr JPH::uint NUM_LAYERS = 2;
-}
-
-class BPLayerInterfaceImpl final : public JPH::BroadPhaseLayerInterface {
-public:
-    BPLayerInterfaceImpl() {
-        objectToBroadPhase_[Layers::NON_MOVING] = BroadPhaseLayers::NON_MOVING;
-        objectToBroadPhase_[Layers::MOVING]     = BroadPhaseLayers::MOVING;
-    }
-    JPH::uint GetNumBroadPhaseLayers() const override { return BroadPhaseLayers::NUM_LAYERS; }
-    JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer inLayer) const override {
-        JPH_ASSERT(inLayer < Layers::NUM_LAYERS);
-        return objectToBroadPhase_[inLayer];
-    }
-#if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
-    const char* GetBroadPhaseLayerName(JPH::BroadPhaseLayer inLayer) const override {
-        switch ((JPH::BroadPhaseLayer::Type)inLayer) {
-            case (JPH::BroadPhaseLayer::Type)BroadPhaseLayers::NON_MOVING: return "NON_MOVING";
-            case (JPH::BroadPhaseLayer::Type)BroadPhaseLayers::MOVING:     return "MOVING";
-            default: return "INVALID";
-        }
-    }
-#endif
-private:
-    JPH::BroadPhaseLayer objectToBroadPhase_[Layers::NUM_LAYERS];
-};
-
-class ObjectVsBroadPhaseLayerFilterImpl final : public JPH::ObjectVsBroadPhaseLayerFilter {
-public:
-    bool ShouldCollide(JPH::ObjectLayer inLayer1, JPH::BroadPhaseLayer inLayer2) const override {
-        switch (inLayer1) {
-            case Layers::NON_MOVING: return inLayer2 == BroadPhaseLayers::MOVING;
-            case Layers::MOVING:     return true;
-            default:                 JPH_ASSERT(false); return false;
-        }
-    }
-};
-
-class ObjectLayerPairFilterImpl final : public JPH::ObjectLayerPairFilter {
-public:
-    bool ShouldCollide(JPH::ObjectLayer inObject1, JPH::ObjectLayer inObject2) const override {
-        switch (inObject1) {
-            case Layers::NON_MOVING: return inObject2 == Layers::MOVING; // static only vs moving
-            case Layers::MOVING:     return true;                        // moving vs anything
-            default:                 JPH_ASSERT(false); return false;
-        }
-    }
-};
 
 // Route Jolt's trace output to the TrussC log.
 void traceImpl(const char* fmt, ...) {
@@ -236,11 +189,19 @@ struct PhysicsWorld::Impl {
     unique_ptr<JPH::TempAllocatorImpl> tempAllocator;
     unique_ptr<JPH::JobSystem>         jobSystem;
 
+    // BroadPhaseLayerInterfaceMask allocates in its constructor, which runs
+    // when Impl is built (PhysicsWorld's constructor — BEFORE setup()/globalInit
+    // had a chance to register Jolt's allocator). Register it first via this
+    // leading member; the call is idempotent.
+    struct JoltAllocatorInit {
+        JoltAllocatorInit() { JPH::RegisterDefaultAllocator(); }
+    } allocatorInit;
+
     // Filters must outlive physicsSystem (it keeps references to them), so they
-    // are declared first.
-    BPLayerInterfaceImpl              bpLayer;
-    ObjectVsBroadPhaseLayerFilterImpl objVsBpFilter;
-    ObjectLayerPairFilterImpl         objPairFilter;
+    // are declared first. Group/mask scheme; a single broadphase layer.
+    JPH::BroadPhaseLayerInterfaceMask      bpLayer{1};
+    JPH::ObjectVsBroadPhaseLayerFilterMask objVsBpFilter{bpLayer};
+    JPH::ObjectLayerPairFilterMask         objPairFilter;
 
     JPH::PhysicsSystem physicsSystem;
     ContactListenerImpl contactListener;
@@ -375,6 +336,10 @@ void PhysicsWorld::setup(int maxBodies, int maxBodyPairs, int maxContactConstrai
     size_t tempSize = std::max<size_t>(16u * 1024 * 1024,
                                        ((size_t)maxPairs + (size_t)maxCC) * 512);
     impl_->tempAllocator = make_unique<JPH::TempAllocatorImpl>((JPH::uint)tempSize);
+
+    // Single broadphase layer holding every group (group/mask filtering happens
+    // at the object-layer level).
+    impl_->bpLayer.ConfigureLayer(JPH::BroadPhaseLayer(0), 0xff, 0);
 
     impl_->physicsSystem.Init(
         maxB, /*numBodyMutexes*/ 0, maxPairs, maxCC,
@@ -558,7 +523,8 @@ PhysicsBody PhysicsWorld::addBox(const Vec3& position, const Vec3& size, bool dy
     JPH::BodyCreationSettings bcs(
         result.Get(), toJolt(position), JPH::Quat::sIdentity(),
         dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
-        dynamic ? Layers::MOVING : Layers::NON_MOVING);
+        defaultObjectLayer());
+    bcs.mAllowDynamicOrKinematic = true;   // allow setMotionType later
 
     TC_LOCK_GUARD(impl_->simMutex);
     JPH::BodyID id = impl_->bodies().CreateAndAddBody(
@@ -582,7 +548,8 @@ PhysicsBody PhysicsWorld::addSphere(const Vec3& position, float radius, bool dyn
     JPH::BodyCreationSettings bcs(
         result.Get(), toJolt(position), JPH::Quat::sIdentity(),
         dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
-        dynamic ? Layers::MOVING : Layers::NON_MOVING);
+        defaultObjectLayer());
+    bcs.mAllowDynamicOrKinematic = true;   // allow setMotionType later
 
     TC_LOCK_GUARD(impl_->simMutex);
     JPH::BodyID id = impl_->bodies().CreateAndAddBody(
@@ -608,7 +575,8 @@ PhysicsBody PhysicsWorld::addCapsule(const Vec3& position, float radius, float c
     JPH::BodyCreationSettings bcs(
         result.Get(), toJolt(position), JPH::Quat::sIdentity(),
         dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
-        dynamic ? Layers::MOVING : Layers::NON_MOVING);
+        defaultObjectLayer());
+    bcs.mAllowDynamicOrKinematic = true;   // allow setMotionType later
 
     TC_LOCK_GUARD(impl_->simMutex);
     JPH::BodyID id = impl_->bodies().CreateAndAddBody(
@@ -638,7 +606,8 @@ PhysicsBody PhysicsWorld::addCylinder(const Vec3& position, float radius, float 
     JPH::BodyCreationSettings bcs(
         result.Get(), toJolt(position), JPH::Quat::sIdentity(),
         dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
-        dynamic ? Layers::MOVING : Layers::NON_MOVING);
+        defaultObjectLayer());
+    bcs.mAllowDynamicOrKinematic = true;   // allow setMotionType later
 
     TC_LOCK_GUARD(impl_->simMutex);
     JPH::BodyID id = impl_->bodies().CreateAndAddBody(
@@ -672,7 +641,8 @@ PhysicsBody PhysicsWorld::addConvexHull(const Vec3& position, const Mesh& mesh,
     JPH::BodyCreationSettings bcs(
         result.Get(), toJolt(position), JPH::Quat::sIdentity(),
         dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Static,
-        dynamic ? Layers::MOVING : Layers::NON_MOVING);
+        defaultObjectLayer());
+    bcs.mAllowDynamicOrKinematic = true;   // allow setMotionType later
 
     TC_LOCK_GUARD(impl_->simMutex);
     JPH::BodyID id = impl_->bodies().CreateAndAddBody(
@@ -722,7 +692,7 @@ PhysicsBody PhysicsWorld::addMesh(const Vec3& position, const Mesh& mesh, bool d
     // Mesh shapes are always static.
     JPH::BodyCreationSettings bcs(
         result.Get(), toJolt(position), JPH::Quat::sIdentity(),
-        JPH::EMotionType::Static, Layers::NON_MOVING);
+        JPH::EMotionType::Static, defaultObjectLayer());
 
     TC_LOCK_GUARD(impl_->simMutex);
     JPH::BodyID id = impl_->bodies().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
@@ -1410,6 +1380,54 @@ bool PhysicsWorld::isBodySensor(uint32_t id) const {
     TC_LOCK_GUARD(impl_->simMutex);
     JPH::BodyLockRead bodyLock(impl_->physicsSystem.GetBodyLockInterface(), JPH::BodyID(id));
     return bodyLock.Succeeded() && bodyLock.GetBody().IsSensor();
+}
+
+void PhysicsWorld::setBodyUserData(uint32_t id, uint64_t data) {
+    if (!impl_->initialized || id == PhysicsBody::kInvalidId) return;
+    TC_LOCK_GUARD(impl_->simMutex);
+    impl_->bodies().SetUserData(JPH::BodyID(id), data);
+}
+
+uint64_t PhysicsWorld::getBodyUserData(uint32_t id) const {
+    if (!impl_->initialized || id == PhysicsBody::kInvalidId) return 0;
+    TC_LOCK_GUARD(impl_->simMutex);
+    return impl_->bodies().GetUserData(JPH::BodyID(id));
+}
+
+void PhysicsWorld::setBodyCollisionLayer(uint32_t id, int layer) {
+    if (!impl_->initialized || id == PhysicsBody::kInvalidId) return;
+    if (layer < 0) layer = 0;
+    if (layer > 7) layer = 7;
+    TC_LOCK_GUARD(impl_->simMutex);
+    JPH::BodyID bid(id);
+    uint32_t mask = JPH::ObjectLayerPairFilterMask::sGetMask(impl_->bodies().GetObjectLayer(bid));
+    impl_->bodies().SetObjectLayer(bid,
+        JPH::ObjectLayerPairFilterMask::sGetObjectLayer(1u << layer, mask));
+}
+
+int PhysicsWorld::getBodyCollisionLayer(uint32_t id) const {
+    if (!impl_->initialized || id == PhysicsBody::kInvalidId) return 0;
+    TC_LOCK_GUARD(impl_->simMutex);
+    uint32_t group = JPH::ObjectLayerPairFilterMask::sGetGroup(
+        impl_->bodies().GetObjectLayer(JPH::BodyID(id)));
+    for (int i = 0; i < 8; i++) if (group & (1u << i)) return i;
+    return 0;
+}
+
+void PhysicsWorld::setBodyCollisionMask(uint32_t id, uint32_t mask) {
+    if (!impl_->initialized || id == PhysicsBody::kInvalidId) return;
+    TC_LOCK_GUARD(impl_->simMutex);
+    JPH::BodyID bid(id);
+    uint32_t group = JPH::ObjectLayerPairFilterMask::sGetGroup(impl_->bodies().GetObjectLayer(bid));
+    impl_->bodies().SetObjectLayer(bid,
+        JPH::ObjectLayerPairFilterMask::sGetObjectLayer(group, mask & 0xffu));
+}
+
+uint32_t PhysicsWorld::getBodyCollisionMask(uint32_t id) const {
+    if (!impl_->initialized || id == PhysicsBody::kInvalidId) return 0xffu;
+    TC_LOCK_GUARD(impl_->simMutex);
+    return JPH::ObjectLayerPairFilterMask::sGetMask(
+        impl_->bodies().GetObjectLayer(JPH::BodyID(id)));
 }
 
 void PhysicsWorld::setBodyFriction(uint32_t id, float friction) {

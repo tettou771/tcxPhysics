@@ -101,6 +101,8 @@ cube count and FPS readout.
 | `removeJoint(j)` / `getJoints()` / `getJointsForBody(id)` | Remove / list live joints (lightweight `PhysicsJoint` handles). |
 | `setBodyMotionType(id, MotionType)` / `moveBodyKinematic(id, pos, rot, dt)` | Switch a body's motion type / drive a kinematic one — see [Kinematic bodies](#kinematic-bodies). |
 | `setBodyIsSensor(id, bool)` / `isBodySensor(id)` | Make a body a trigger (sensor) — see [Sensors (triggers)](#sensors-triggers). |
+| `setBodyUserData(id, uint64)` / `getBodyUserData(id)` | Free 64-bit tag per body (an id, an index, a packed pointer). |
+| `setBodyCollisionLayer(id, 0..7)` / `setBodyCollisionMask(id, bits)` | Collision filtering — see [Collision filtering](#collision-filtering). |
 | `updateAsyncStart(hz = 120)` / `updateAsyncStop()` / `isAsync()` | Step on a fixed-timestep clock — see [Async stepping](#async-stepping). |
 | `contactBegan` / `contactPersisted` / `contactEnded` | `tc::Event<ContactEventArgs>` — see [Contact events](#contact-events). |
 | `nativeSystem()` / `nativeBodyInterface()` | Raw Jolt pointers (`void*`) — see [Advanced: raw Jolt](#advanced-raw-jolt-escape-hatch). |
@@ -131,6 +133,8 @@ lives in the `PhysicsWorld`. The setters return `*this`, so they chain.
 | `setMotionType(MotionType)` | Switch between `Static` / `Kinematic` / `Dynamic`. |
 | `moveKinematic(pos, rot, dt)` | Drive a kinematic body so it pushes dynamics with real momentum (call each frame). |
 | `setSensor(bool)` / `isSensor()` | Make this body a trigger — detects overlaps, blocks nothing. |
+| `setUserData(uint64)` / `getUserData()` | Free 64-bit tag — name your bodies in contact events / raycast hits. |
+| `setCollisionLayer(0..7)` / `setCollisionMask(bits)` | Which layer this body is on / which layers it hits. |
 | `setFriction(f)` / `getFriction()` | `0` = ice, `~1` = grippy. |
 | `setRestitution(r)` / `getRestitution()` | `0` = dead, `1` = full bounce. |
 | `activate()` / `isActive()` | Wake / query a sleeping body. |
@@ -222,6 +226,33 @@ zone.setSensor(true);   // now things fall through it but it still reports conta
 
 A static sensor detects the dynamic bodies that move through it. Example:
 `example-trigger/`.
+
+---
+
+## Collision filtering
+
+Each body lives on **one layer** (0..7) and carries a **mask** of layers it
+collides with (bit *n* = layer *n*). Two bodies collide only if **each one's
+mask contains the other's layer**:
+
+```cpp
+// red team: layer 1, hits ground (0) and red (1) — ignores blue
+redBody.setCollisionLayer(1).setCollisionMask(0b011);
+// blue team: layer 2, hits ground and blue — ignores red
+blueBody.setCollisionLayer(2).setCollisionMask(0b101);
+```
+
+Defaults: layer 0, mask `0xff` (everything collides). Change either at any
+time — sensors honor the same filter (they only report overlaps their mask
+allows). Tag bodies with `setUserData(id)` to recognize them in contact events:
+
+```cpp
+world.contactBegan.listen([](ContactEventArgs& c) {
+    logNotice() << "hit: #" << c.a.getUserData() << " x #" << c.b.getUserData();
+});
+```
+
+Example: `example-collisionFilter/`.
 
 ---
 
@@ -373,8 +404,14 @@ Two things this costs you (both by design — it's why the default build is clea
    synchronous `update()` you're fine (main thread, between steps); in async mode
    call `updateAsyncStop()` first (or take your own lock).
 
-Full working example: **`example-joltNativeAccess/`** — builds a ball-jointed
-hanging chain using Jolt constraints, with the `local.cmake` shown above.
+Full working example: **`example-joltNativeAccess/`** — rails a bead onto a
+closed Hermite-spline loop with a raw Jolt path constraint (a feature the
+wrapper doesn't expose), with the `local.cmake` shown above.
+
+One gotcha when going raw: never call wrapper methods (e.g.
+`body.getPosition()`) on a body you hold a `JPH::BodyLockWrite` for — the
+wrapper re-locks the same body and deadlocks. Read through the held lock
+(`lock.GetBody().GetPosition()`) instead.
 
 ---
 
@@ -395,7 +432,8 @@ hanging chain using Jolt constraints, with the `local.cmake` shown above.
 | `example-ragdoll/` | Ragdolls — swing-twist shoulders/hips/neck + one-way hinge elbows/knees; toss them around. |
 | `example-gears/` | Transmissions — one motor drives a second wheel through a gear and a rack through a rack-and-pinion. |
 | `example-fixedTimestep/` | `updateAsyncStart` — a fixed 240 Hz step keeps a tall stack solid; per-frame (capped to 30 fps) wobbles and topples. |
-| `example-joltNativeAccess/` | The raw-Jolt escape hatch — a constraint-based chain. |
+| `example-collisionFilter/` | Layers/masks — two teams pass through each other until SPACE makes them collide; user-data tags caption contacts. |
+| `example-joltNativeAccess/` | The raw-Jolt escape hatch — a path constraint (not wrapped) rails a bead onto a closed spline loop. |
 
 ---
 

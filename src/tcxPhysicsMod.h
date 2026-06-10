@@ -50,6 +50,7 @@ struct ColliderShape {
 //             dynamics with the right momentum, but ignores forces/gravity itself.
 //             Great for moving platforms, paddles, doors.
 enum class BodyType { Dynamic, Static, Kinematic };
+TC_ENUM_LABELS(BodyType, "Dynamic", "Static", "Kinematic")
 
 // Process-wide default world, so `addMod<RigidBody>(shape)` needs no world passed.
 // Point it at your own instance with setDefaultWorld(); otherwise the first access
@@ -133,6 +134,34 @@ public:
     RigidBody& setTrigger(bool on = true) { trigger_ = on; if (body_.isValid()) body_.setSensor(on); return *this; }
     bool isTrigger() const { return trigger_; }
 
+    // Switch how the body moves at runtime (Dynamic <-> Static <-> Kinematic).
+    // The sync direction follows: Dynamic = body drives node, Kinematic = node
+    // drives body, Static = parked.
+    RigidBody& setBodyType(BodyType t) {
+        type_ = t;
+        if (body_.isValid()) {
+            body_.setMotionType(t == BodyType::Dynamic ? MotionType::Dynamic
+                              : t == BodyType::Static  ? MotionType::Static
+                                                       : MotionType::Kinematic);
+        }
+        return *this;
+    }
+    BodyType getBodyType() const { return type_; }
+
+    // Collision filtering (see PhysicsBody::setCollisionLayer/Mask): one layer
+    // 0..7 + a mask of layers this body collides with. Chainable; applied
+    // immediately if the body exists, else at attach.
+    RigidBody& setCollisionLayer(int layer) { layer_ = layer; if (body_.isValid()) body_.setCollisionLayer(layer); return *this; }
+    int getCollisionLayer() const { return body_.isValid() ? body_.getCollisionLayer() : (layer_ < 0 ? 0 : layer_); }
+    RigidBody& setCollisionMask(uint32_t mask) { mask_ = (int64_t)mask; if (body_.isValid()) body_.setCollisionMask(mask); return *this; }
+    uint32_t getCollisionMask() const { return body_.isValid() ? body_.getCollisionMask() : (mask_ < 0 ? 0xffu : (uint32_t)mask_); }
+
+    // Inspector-facing getters (live values when the body exists).
+    float getFriction() const    { return body_.isValid() ? body_.getFriction()    : friction_; }
+    float getRestitution() const { return body_.isValid() ? body_.getRestitution() : restitution_; }
+    float getDensity() const     { return density_; }
+    bool  isWireframe() const    { return wireframe_; }
+
     // --- joints --------------------------------------------------------------
     // Constrain this body to another node's RigidBody. The OTHER node is the
     // base; THIS body is the side that moves positively (motor +velocity, +limits):
@@ -200,6 +229,19 @@ public:
     tc::Event<Collision> onTriggerStay;      // still overlapping, every step (Stay)
     tc::Event<Collision> onTriggerEnded;     // stopped overlapping (Exit)
 
+    // Reflection: shows up in inspectors (e.g. tcxNodeInspector) with live,
+    // editable physics state. Setters run, so edits hit the Jolt body.
+    using Super = tc::Mod;
+    TC_REFLECT(RigidBody)
+        TC_ENUM_PROPERTY(bodyType, getBodyType, setBodyType)
+        TC_PROPERTY_RO(density, getDensity)
+        TC_PROPERTY(friction, getFriction, setFriction)
+        TC_PROPERTY(restitution, getRestitution, setRestitution)
+        TC_PROPERTY(trigger, isTrigger, setTrigger)
+        TC_PROPERTY(collisionLayer, getCollisionLayer, setCollisionLayer)
+        TC_PROPERTY(wireframe, isWireframe, setWireframe)
+    TC_REFLECT_END
+
 protected:
     void setup() override {
         tc::Node* n = getOwner();
@@ -221,6 +263,8 @@ protected:
             if (trigger_)             body_.setSensor(true);
             if (friction_ >= 0.0f)    body_.setFriction(friction_);
             if (restitution_ >= 0.0f) body_.setRestitution(restitution_);
+            if (layer_ >= 0)          body_.setCollisionLayer(layer_);
+            if (mask_ >= 0)           body_.setCollisionMask((uint32_t)mask_);
 
             // Register for collision routing. The first body on this world hooks
             // the world's contact events.
@@ -326,6 +370,8 @@ private:
     float friction_ = -1.0f;
     float restitution_ = -1.0f;
     bool trigger_ = false;
+    int layer_ = -1;        // pending collision layer (-1 = default)
+    int64_t mask_ = -1;     // pending collision mask (-1 = default 0xff)
     PhysicsBody body_;
     std::weak_ptr<int> worldAlive_;
     bool wireframe_ = false;
@@ -361,9 +407,15 @@ class ColliderRenderer : public tc::Mod {
 public:
     // RENDER material (separate from RigidBody's physics material).
     ColliderRenderer& setColor(const tc::Color& c)       { material_.setBaseColor(c); return *this; }
+    tc::Color getColor() const                           { return material_.getBaseColor(); }
     ColliderRenderer& setMaterial(const tc::Material& m) { material_ = m; return *this; }
     ColliderRenderer& setTexture(const tc::Texture& t)   { material_.setBaseColorTexture(&t); return *this; }
     ColliderRenderer& clearTexture()                     { material_.setBaseColorTexture(nullptr); return *this; }
+
+    using Super = tc::Mod;
+    TC_REFLECT(ColliderRenderer)
+        TC_PROPERTY(color, getColor, setColor)
+    TC_REFLECT_END
 
 protected:
     void draw() override {

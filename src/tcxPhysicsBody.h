@@ -76,6 +76,22 @@ public:
     const PhysicsBody& setSensor(bool sensor) const;
     bool isSensor() const;
 
+    // --- user data -------------------------------------------------------------
+    // Free 64-bit tag (an id, an index, a packed pointer...). Great for finding
+    // "which of MY things is this?" in a contact event or a raycast hit.
+    const PhysicsBody& setUserData(uint64_t data) const;
+    uint64_t getUserData() const;
+
+    // --- collision filtering -----------------------------------------------
+    // A body lives on ONE layer (0..7) and carries a mask of layers it collides
+    // with (bit n = layer n). Both sides must agree: A and B collide iff A's
+    // mask contains B's layer AND B's mask contains A's layer.
+    // Defaults: layer 0, mask 0xff (collide with everything).
+    const PhysicsBody& setCollisionLayer(int layer) const;
+    int getCollisionLayer() const;
+    const PhysicsBody& setCollisionMask(uint32_t mask) const;
+    uint32_t getCollisionMask() const;
+
     // --- material ------------------------------------------------------------
     const PhysicsBody& setFriction(float friction) const;        // 0 = ice, ~1 = grippy
     float getFriction() const;

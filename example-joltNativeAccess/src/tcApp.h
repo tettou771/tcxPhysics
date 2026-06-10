@@ -7,14 +7,15 @@ using namespace std;
 using namespace tc;
 using namespace tcx;
 
-// jolt - the advanced escape hatch in action.
+// joltNativeAccess - the raw-Jolt escape hatch.
 //
-// tcxPhysics doesn't wrap constraints (yet), but we don't have to wait for it:
-// <tcxPhysicsJolt.h> hands us the raw JPH::PhysicsSystem so we can build a
-// ball-jointed hanging chain ourselves. Everything else (bodies, drawing,
-// stepping) stays in the friendly wrapper.
+// tcxPhysics wraps the common 90% (bodies, shapes, joints, motors, filters...).
+// For the rest, <tcxPhysicsJolt.h> hands you the raw JPH::PhysicsSystem. This
+// example uses it for a PATH CONSTRAINT — a feature the wrapper does NOT
+// expose: a bead locked onto a closed Hermite-spline loop, sliding around the
+// tilted track under gravity alone, forever.
 //
-//   click : shove the chain sideways (wrapper applyImpulse)
+//   click : push the bead along the track
 //   drag  : orbit camera
 //
 // See CMakeLists.txt for the one build line the hatch needs (link Jolt).
@@ -28,15 +29,13 @@ public:
 
 private:
     EasyCam cam;
-    PhysicsWorld world;
-
-    Mesh unitCube;
-    Material linkMat;
-    Material anchorMat;
     Light keyLight;
     Light fillLight;
 
-    PhysicsBody anchor;                 // static top point
-    std::vector<PhysicsBody> links;     // the swinging chain
+    PhysicsWorld world;
+    PhysicsBody  bead;
+    Mesh         beadMesh;
+    Material     beadMat;
+    vector<Vec3> trackPoints;   // sampled loop, for drawing
     float lastTime = 0.0f;
 };

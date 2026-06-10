@@ -254,6 +254,19 @@ public:
     void setBodyIsSensor(uint32_t id, bool sensor);
     bool isBodySensor(uint32_t id) const;
 
+    // Free 64-bit tag carried by the body (an id, an index, a packed pointer...).
+    void setBodyUserData(uint32_t id, uint64_t data);
+    uint64_t getBodyUserData(uint32_t id) const;
+
+    // Collision filtering: each body belongs to ONE layer (0..7) and carries a
+    // MASK of layers it collides with (bit n = layer n). Two bodies collide iff
+    // each one's mask contains the other's layer. Defaults: layer 0, mask 0xff
+    // (everything collides). Sensors report only the overlaps their mask allows.
+    void setBodyCollisionLayer(uint32_t id, int layer);
+    int getBodyCollisionLayer(uint32_t id) const;
+    void setBodyCollisionMask(uint32_t id, uint32_t mask);
+    uint32_t getBodyCollisionMask(uint32_t id) const;
+
     void setBodyFriction(uint32_t id, float friction);
     float getBodyFriction(uint32_t id) const;
     void setBodyRestitution(uint32_t id, float restitution);

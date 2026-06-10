@@ -1,58 +1,72 @@
 #include "tcApp.h"
 
-// The escape hatch: raw Jolt access for the constraint API the wrapper doesn't
-// expose. Including this pulls in Jolt headers (see local.cmake — we link the
-// addon's Jolt target so headers + JPH_* defines match).
+// The escape hatch: raw Jolt access for features the wrapper does not expose —
+// here, a path constraint. Including this pulls in Jolt headers (see
+// local.cmake — we link the addon's Jolt target so headers + JPH_* defines match).
 #include <tcxPhysicsJolt.h>
-#include <Jolt/Physics/Constraints/PointConstraint.h>
+#include <Jolt/Physics/Constraints/PathConstraint.h>
+#include <Jolt/Physics/Constraints/PathConstraintPathHermite.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 
-// Metre-scale chain.
-static constexpr int   LINKS = 9;
-static constexpr float BOX   = 0.18f;
-static constexpr float GAP   = 0.26f;   // centre-to-centre spacing of links
-static constexpr float TOP_Y = 2.6f;
+// The track: a closed loop of radius R, tilted so gravity keeps the bead moving.
+static constexpr int   TRACK_SEGMENTS = 24;
+static constexpr float TRACK_RADIUS   = 1.4f;
+static constexpr float TRACK_TILT     = 0.45f;   // radians around X
+static const     Vec3  TRACK_CENTER(0.0f, 1.6f, 0.0f);
 
-// A faint reference grid on the ground plane (y = 0).
-static void drawFloorGrid(float halfExtent, float step) {
-    setColor(0.25f, 0.27f, 0.30f);
-    for (float a = -halfExtent; a <= halfExtent + 0.001f; a += step) {
-        drawLine(Vec3(a, 0.0f, -halfExtent), Vec3(a, 0.0f, halfExtent));
-        drawLine(Vec3(-halfExtent, 0.0f, a), Vec3(halfExtent, 0.0f, a));
-    }
+// Point on the loop at angle a (world space).
+static Vec3 trackPoint(float a) {
+    // Circle in XZ, then tilt around X: y' = -z sin(t), z' = z cos(t).
+    float x = cosf(a) * TRACK_RADIUS;
+    float z = sinf(a) * TRACK_RADIUS;
+    float y = -z * sinf(TRACK_TILT);
+    z       =  z * cosf(TRACK_TILT);
+    return TRACK_CENTER + Vec3(x, y, z);
 }
 
-// Pin two bodies together with a ball joint at a world-space point, using the
-// raw Jolt PhysicsSystem reached via the escape hatch.
-static void ballJoint(PhysicsWorld& world, const PhysicsBody& a, const PhysicsBody& b,
-                      const Vec3& worldPoint) {
+// Attach `bead` to a closed Hermite loop with a raw Jolt PathConstraint
+// (body 1 = the world, body 2 = the bead).
+static void pathConstraint(PhysicsWorld& world, const PhysicsBody& bead) {
     JPH::PhysicsSystem& sys = joltSystem(world);
+
+    auto* path = new JPH::PathConstraintPathHermite();
+    for (int i = 0; i < TRACK_SEGMENTS; i++) {
+        float a  = TAU * i / TRACK_SEGMENTS;
+        Vec3 p   = trackPoint(a);
+        // Tangent = d(point)/d(angle) * the angle step (Hermite segment scale).
+        float da = TAU / TRACK_SEGMENTS;
+        Vec3 t   = (trackPoint(a + 0.001f) - trackPoint(a - 0.001f)) * (da / 0.002f);
+        JPH::Vec3 normal(0.0f, cosf(TRACK_TILT), sinf(TRACK_TILT));   // loop plane normal
+        path->AddPoint(JPH::Vec3(p.x, p.y, p.z), JPH::Vec3(t.x, t.y, t.z), normal);
+    }
+    path->SetIsLooping(true);
+
     const JPH::BodyLockInterface& lockIf = sys.GetBodyLockInterface();
+    JPH::BodyLockWrite lb(lockIf, joltBodyId(bead));
+    if (!lb.Succeeded()) return;
 
-    JPH::BodyLockWrite la(lockIf, joltBodyId(a));
-    JPH::BodyLockWrite lb(lockIf, joltBodyId(b));
-    if (!la.Succeeded() || !lb.Succeeded()) return;
+    JPH::PathConstraintSettings s;
+    s.mPath = path;                                  // ref-counted from here
+    s.mPathPosition = JPH::Vec3::sZero();            // path points are world-space
+    s.mRotationConstraintType = JPH::EPathRotationConstraintType::ConstrainToPath;
+    // Start fraction = wherever the bead is. Read the position THROUGH the held
+    // lock — calling the wrapper here (bead.getPosition()) would try to re-lock
+    // the same body and deadlock.
+    JPH::Vec3 beadPos(lb.GetBody().GetPosition());
+    s.mPathFraction = path->GetClosestPoint(beadPos, 0.0f);
 
-    JPH::PointConstraintSettings s;
-    s.mSpace  = JPH::EConstraintSpace::WorldSpace;
-    s.mPoint1 = s.mPoint2 = JPH::RVec3(worldPoint.x, worldPoint.y, worldPoint.z);
-
-    JPH::Constraint* c = s.Create(la.GetBody(), lb.GetBody());
+    JPH::Constraint* c = s.Create(JPH::Body::sFixedToWorld, lb.GetBody());
     sys.AddConstraint(c);   // Jolt ref-counts and owns it from here
 }
 
 void tcApp::setup() {
-    setWindowTitle("tcxPhysics - joltNativeAccess  (ball-jointed chain via raw Jolt)");
+    setWindowTitle("tcxPhysics - joltNativeAccess  (raw Jolt: path constraint)");
 
-    cam.setTarget(0.0f, 1.3f, 0.0f);
+    cam.setTarget(TRACK_CENTER);
     cam.setDistance(5.5f);
-    cam.setAzimuth(0.6f);
-    cam.setElevation(0.22f);
+    cam.setAzimuth(0.5f);
+    cam.setElevation(0.35f);
     cam.enableMouseInput();
-
-    unitCube = createBox(1.0f);
-    linkMat.setBaseColor(0.85f, 0.16f, 0.01f).setMetallic(0.0f).setRoughness(0.45f);
-    anchorMat.setBaseColor(0.10f, 0.30f, 0.45f).setMetallic(0.0f).setRoughness(0.6f);
 
     keyLight.setDirectional(Vec3(-0.4f, -1.0f, -0.6f));
     keyLight.setDiffuse(1.0f, 0.95f, 0.88f);
@@ -64,22 +78,18 @@ void tcApp::setup() {
     fillLight.setIntensity(1.1f);
     addLight(fillLight);
 
-    world.setup();                 // default gravity -9.81
+    world.setup();
 
-    // Static anchor at the top (dynamic = false).
-    anchor = world.addBox(Vec3(0.0f, TOP_Y, 0.0f), Vec3(BOX, BOX, BOX), false);
+    // The bead starts on the track (the wrapper makes the body; raw Jolt rails it).
+    bead = world.addBox(trackPoint(0.0f), Vec3(0.22f, 0.14f, 0.14f));
+    pathConstraint(world, bead);
 
-    // Dynamic links hanging below, each ball-jointed to the one above.
-    PhysicsBody prev = anchor;
-    float prevY = TOP_Y;
-    for (int i = 0; i < LINKS; ++i) {
-        float y = TOP_Y - GAP * (i + 1);
-        PhysicsBody link = world.addBox(Vec3(0.0f, y, 0.0f), Vec3(BOX, BOX, BOX));
-        ballJoint(world, prev, link, Vec3(0.0f, (prevY + y) * 0.5f, 0.0f));
-        links.push_back(link);
-        prev = link;
-        prevY = y;
-    }
+    beadMesh = createBox(1.0f);
+    beadMat.setBaseColor(0.85f, 0.16f, 0.01f).setMetallic(0.0f).setRoughness(0.45f);
+
+    // Sample the loop once for drawing.
+    for (int i = 0; i <= TRACK_SEGMENTS * 4; i++)
+        trackPoints.push_back(trackPoint(TAU * i / (TRACK_SEGMENTS * 4)));
 
     lastTime = getElapsedTimef();
 }
@@ -97,42 +107,39 @@ void tcApp::draw() {
     cam.begin();
     setCameraPosition(cam.getPosition());
 
-    drawFloorGrid(2.5f, 0.5f);
+    // The track.
+    setColor(0.35f, 0.55f, 0.75f);
+    for (size_t i = 1; i < trackPoints.size(); i++)
+        drawLine(trackPoints[i - 1], trackPoints[i]);
 
-    auto drawBody = [&](const PhysicsBody& b) {
-        if (!b.isValid()) return;
-        Vec3 s = b.getSize();
+    // The bead (oriented to the path by the constraint).
+    if (bead.isValid()) {
+        Vec3 s = bead.getSize();
         pushMatrix();
-        translate(b.getPosition());
-        rotate(b.getRotation());
+        translate(bead.getPosition());
+        rotate(bead.getRotation());
         scale(s.x, s.y, s.z);
-        unitCube.draw();
+        setMaterial(beadMat);
+        beadMesh.draw();
+        clearMaterial();
         popMatrix();
-    };
-
-    setMaterial(anchorMat);
-    drawBody(anchor);
-    clearMaterial();
-
-    setMaterial(linkMat);
-    for (const PhysicsBody& b : links) drawBody(b);
-    clearMaterial();
+    }
 
     cam.end();
 
     setColor(1.0f);
     drawBitmapString(
-        "ball-jointed chain via <tcxPhysicsJolt.h>\n"
-        "links: " + std::to_string((int)links.size()) + "\n" +
-        "\n" +
-        "click: shove the chain\n" +
+        "raw Jolt via <tcxPhysicsJolt.h>: a PATH CONSTRAINT\n"
+        "(not wrapped) rails the bead onto a closed Hermite\n"
+        "loop. Gravity alone drives it around the tilted track.\n"
+        "\n"
+        "click: push the bead\n"
         "drag:  orbit camera",
         20.0f, 20.0f);
 }
 
 void tcApp::mousePressed(Vec2 pos, int button) {
-    (void)pos; (void)button;
-    // Set it swinging — a mass-independent kick on the bottom link.
-    if (!links.empty() && links.back().isValid())
-        links.back().addVelocity(Vec3(2.5f, 0.0f, 0.0f));
+    // Mass-independent shove along the world X axis — the constraint converts
+    // whatever component is tangent to the track into speed along it.
+    if (bead.isValid()) bead.addVelocity(Vec3(3.0f, 0.0f, 0.0f));
 }

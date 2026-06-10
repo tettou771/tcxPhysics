@@ -114,6 +114,38 @@ bool PhysicsBody::isSensor() const {
     return world_->isBodySensor(id_);
 }
 
+// --- user data ---------------------------------------------------------------
+const PhysicsBody& PhysicsBody::setUserData(uint64_t data) const {
+    if (isValid()) world_->setBodyUserData(id_, data);
+    return *this;
+}
+
+uint64_t PhysicsBody::getUserData() const {
+    if (!isValid()) return 0;
+    return world_->getBodyUserData(id_);
+}
+
+// --- collision filtering -------------------------------------------------
+const PhysicsBody& PhysicsBody::setCollisionLayer(int layer) const {
+    if (isValid()) world_->setBodyCollisionLayer(id_, layer);
+    return *this;
+}
+
+int PhysicsBody::getCollisionLayer() const {
+    if (!isValid()) return 0;
+    return world_->getBodyCollisionLayer(id_);
+}
+
+const PhysicsBody& PhysicsBody::setCollisionMask(uint32_t mask) const {
+    if (isValid()) world_->setBodyCollisionMask(id_, mask);
+    return *this;
+}
+
+uint32_t PhysicsBody::getCollisionMask() const {
+    if (!isValid()) return 0xffu;
+    return world_->getBodyCollisionMask(id_);
+}
+
 // --- material ---------------------------------------------------------------
 const PhysicsBody& PhysicsBody::setFriction(float friction) const {
     if (isValid()) world_->setBodyFriction(id_, friction);
