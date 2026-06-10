@@ -33,6 +33,7 @@
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 #include <Jolt/Physics/Constraints/GearConstraint.h>
 #include <Jolt/Physics/Constraints/RackAndPinionConstraint.h>
+#include <Jolt/Physics/Constraints/SixDOFConstraint.h>
 #include <Jolt/Physics/Constraints/SpringSettings.h>
 
 // Compile the opt-in escape-hatch header here too, so it can never silently rot
@@ -876,6 +877,29 @@ JPH::TwoBodyConstraint* createJoltConstraint(const Joint& def, JPH::Body& a, JPH
             s.mNormalHalfConeAngle = s.mPlaneHalfConeAngle = def.coneAngle;
             s.mTwistMinAngle = def.twistMin;
             s.mTwistMaxAngle = def.twistMax;
+            return s.Create(a, b);
+        }
+        case JointType::SixDof: {
+            JPH::SixDOFConstraintSettings s;
+            s.mSpace     = JPH::EConstraintSpace::WorldSpace;
+            s.mPosition1 = s.mPosition2 = toJolt(def.anchorA);
+            // World-aligned constraint frame (default mAxisX/Y). Per axis:
+            // (0, 0) range = fixed, a real range = limited, free flag = free.
+            using EAxis = JPH::SixDOFConstraintSettings::EAxis;
+            const float tmin[3] = { def.sixTransMin.x, def.sixTransMin.y, def.sixTransMin.z };
+            const float tmax[3] = { def.sixTransMax.x, def.sixTransMax.y, def.sixTransMax.z };
+            const float rmin[3] = { def.sixRotMin.x,  def.sixRotMin.y,  def.sixRotMin.z };
+            const float rmax[3] = { def.sixRotMax.x,  def.sixRotMax.y,  def.sixRotMax.z };
+            for (int i = 0; i < 3; i++) {
+                EAxis t = (EAxis)(EAxis::TranslationX + i);
+                EAxis r = (EAxis)(EAxis::RotationX + i);
+                if (def.sixTransFree)                          s.MakeFreeAxis(t);
+                else if (tmin[i] == 0.0f && tmax[i] == 0.0f)   s.MakeFixedAxis(t);
+                else                                           s.SetLimitedAxis(t, tmin[i], tmax[i]);
+                if (def.sixRotFree)                            s.MakeFreeAxis(r);
+                else if (rmin[i] == 0.0f && rmax[i] == 0.0f)   s.MakeFixedAxis(r);
+                else                                           s.SetLimitedAxis(r, rmin[i], rmax[i]);
+            }
             return s.Create(a, b);
         }
         case JointType::Gear:

@@ -23,7 +23,7 @@ class PhysicsWorld;
 // the world, so there is no lifetime to manage on the caller's side.
 // =============================================================================
 
-enum class JointType { Point, Hinge, Slider, Distance, Fixed, Cone, SwingTwist, Gear, RackAndPinion };
+enum class JointType { Point, Hinge, Slider, Distance, Fixed, Cone, SwingTwist, Gear, RackAndPinion, SixDof };
 
 // What to build. All positions / axes are WORLD-space at creation time —
 // place your bodies first, then describe the joint where it should bite.
@@ -41,6 +41,9 @@ struct Joint {
     bool  hasMotor = false;
     float coneAngle = 0.0f;                             // cone / swingTwist swing (rad, half-angle)
     float twistMin = 0.0f, twistMax = 0.0f;             // swingTwist twist range (rad)
+    tc::Vec3 sixTransMin, sixTransMax;                  // sixDof per-axis travel (m)
+    tc::Vec3 sixRotMin, sixRotMax;                      // sixDof per-axis rotation (rad)
+    bool sixTransFree = false, sixRotFree = false;      // sixDof: fully open groups
 
     // A ball joint: pins the two bodies together at one world point. Chains,
     // ragdoll joints, pendulums.
@@ -80,6 +83,15 @@ struct Joint {
         Joint j; j.type = JointType::SwingTwist;
         j.anchorA = j.anchorB = worldPivot; j.axis = twistAxis; return j;
     }
+    // The generic 6-degrees-of-freedom joint. Starts as a WELD (all six axes
+    // fixed) — open exactly the freedom you want with translation() /
+    // rotation() / freeTranslation() / freeRotation(). Axes are world X/Y/Z.
+    //   Joint::sixDof(p).translation({0,-0.1f,0}, {0,0.1f,0})   // bouncy mount
+    //                   .rotation({-0.2f,0,-0.2f}, {0.2f,0,0.2f})
+    static Joint sixDof(const tc::Vec3& worldPivot) {
+        Joint j; j.type = JointType::SixDof;
+        j.anchorA = j.anchorB = worldPivot; return j;
+    }
 
     // --- chainable options ---------------------------------------------------
     // hinge: angle range in radians (min in [-pi,0], max in [0,pi]).
@@ -97,6 +109,14 @@ struct Joint {
     Joint& swing(float halfAngle) { coneAngle = halfAngle; return *this; }
     // swingTwist: allowed twist range around the twist axis (rad, in [-pi, pi]).
     Joint& twist(float min, float max) { twistMin = min; twistMax = max; return *this; }
+    // sixDof: per-axis travel range in metres (an axis with min == max == 0
+    // stays fixed). World X/Y/Z components.
+    Joint& translation(const tc::Vec3& min, const tc::Vec3& max) { sixTransMin = min; sixTransMax = max; return *this; }
+    // sixDof: per-axis rotation range in radians (0,0 = fixed axis).
+    Joint& rotation(const tc::Vec3& min, const tc::Vec3& max) { sixRotMin = min; sixRotMax = max; return *this; }
+    // sixDof: open a whole group completely.
+    Joint& freeTranslation() { sixTransFree = true; return *this; }
+    Joint& freeRotation()    { sixRotFree = true;  return *this; }
 };
 
 // A handle to one live joint. Owns nothing; all accessors query the world.

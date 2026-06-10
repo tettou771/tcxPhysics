@@ -256,6 +256,7 @@ description (named factory + chainable options):
 | `Joint::fixed()` | Welds the bodies in their current relative pose. |
 | `Joint::cone(worldPivot, axis, halfAngle)` | Ball joint whose swing is capped to a cone. |
 | `Joint::swingTwist(worldPivot, twistAxis)` | The ragdoll joint: `.swing(halfAngle)` cone + `.twist(min, max)`. Shoulders, hips. |
+| `Joint::sixDof(worldPivot)` | Generic 6-DOF: starts as a weld, open axes with `.translation(min, max)` / `.rotation(min, max)` (per-axis Vec3; 0,0 = fixed) or `.freeTranslation()` / `.freeRotation()`. |
 
 **Order matters** for hinge/slider signs: in `world.addJoint(a, b, def)` `a` is the
 base and `b` moves positively; `rb->jointTo(other, def)` makes *other* the base, so

@@ -80,6 +80,18 @@ void tcApp::buildScene() {
     pendulum = spawnBody(ColliderShape::sphere(0.22f), Color(0.55f, 0.80f, 0.40f), ballPos);
     pendulum->getMod<RigidBody>()->jointToWorld(
         Joint::distance(ballPos, hook).spring(2.0f, 0.2f));
+
+    // --- loose sign: a sixDof mount — a weld with a little slack ------------
+    // The panel floats where it spawned but may bob ±10 cm vertically and tilt
+    // ±15 deg around X/Z. Everything else stays welded to the world.
+    Vec3 signPos(3.2f, 1.4f, 0.0f);
+    sign = spawnBody(ColliderShape::box(Vec3(0.8f, 0.5f, 0.06f)),
+                     Color(0.85f, 0.75f, 0.25f), signPos);
+    sign->getMod<RigidBody>()->jointToWorld(
+        Joint::sixDof(signPos)
+            .translation(Vec3(0.0f, -0.10f, 0.0f), Vec3(0.0f, 0.10f, 0.0f))
+            .rotation(Vec3(-TAU / 24.0f, 0.0f, -TAU / 24.0f),
+                      Vec3( TAU / 24.0f, 0.0f,  TAU / 24.0f)));
 }
 
 void tcApp::update() {
@@ -109,6 +121,7 @@ void tcApp::endDraw() {
         "chain    : Joint::point ball joints\n" +
         "door     : Joint::hinge with +/-100 deg limits\n" +
         "pendulum : Joint::distance to the air, springy\n" +
+        "sign     : Joint::sixDof - a weld with slack (bob +/-10cm, tilt +/-15deg)\n" +
         "\n" +
         "Wired with rb->jointTo(other, def); the world owns\n" +
         "the joints (drawWire shows them); destroying a node\n" +
@@ -123,6 +136,8 @@ void tcApp::mousePressed(Vec2 pos, int button) {
     if (chainTail) chainTail->getMod<RigidBody>()->body().addVelocity(Vec3(2.5f, 0.0f, 0.8f));
     if (door)      door->getMod<RigidBody>()->body().addVelocity(Vec3(0.0f, 0.0f, 2.5f));
     if (pendulum)  pendulum->getMod<RigidBody>()->body().addVelocity(Vec3(1.8f, 0.0f, 0.6f));
+    if (sign)      sign->getMod<RigidBody>()->body().addVelocity(Vec3(0.0f, 1.5f, 0.0f))
+                                                    .applyAngularImpulse(Vec3(2.0f, 0.0f, 1.0f));
 }
 
 void tcApp::keyPressed(int key) {
@@ -133,6 +148,7 @@ void tcApp::keyPressed(int key) {
         door = nullptr;
         pendulum = nullptr;
         chainTail = nullptr;
+        sign = nullptr;
         buildScene();
     }
 }

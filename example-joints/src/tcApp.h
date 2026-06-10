@@ -50,4 +50,5 @@ private:
     Node* door = nullptr;       // hinge demo
     Node* pendulum = nullptr;   // distance-spring demo
     Node* chainTail = nullptr;  // bottom link of the point-joint chain
+    Node* sign = nullptr;       // sixDof loose-mount demo
 };
