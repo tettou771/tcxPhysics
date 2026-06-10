@@ -134,9 +134,11 @@ public:
     bool isTrigger() const { return trigger_; }
 
     // --- joints --------------------------------------------------------------
-    // Constrain this body to another node's RigidBody:
+    // Constrain this body to another node's RigidBody. The OTHER node is the
+    // base; THIS body is the side that moves positively (motor +velocity, +limits):
     //
     //   door->getMod<RigidBody>()->jointTo(frame, Joint::hinge(edge, {0,1,0}));
+    //   // "joint the door TO the frame" — the door swings.
     //
     // The world owns the joint; the returned PhysicsJoint is a lightweight
     // handle. Destroying either node removes the joint automatically.
@@ -156,7 +158,9 @@ public:
             tc::logWarning() << "tcxPhysics: jointTo target has no live RigidBody.";
             return PhysicsJoint();
         }
-        return world_->addJoint(body_, otherRb->body_, def);
+        // other = base (body 1), this = the moving side (body 2) — Jolt measures
+        // relative motion (and drives motors) as body 2 relative to body 1.
+        return world_->addJoint(otherRb->body_, body_, def);
     }
     PhysicsJoint jointTo(const std::shared_ptr<tc::Node>& other, const Joint& def) {
         return jointTo(other.get(), def);

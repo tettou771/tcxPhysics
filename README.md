@@ -97,6 +97,7 @@ cube count and FPS readout.
 | `clearDynamicBodies()` | Remove every dynamic body, keep static scenery. |
 | `getNumBodies()` | Total body count. |
 | `addJoint(a, b, def)` / `addJoint(a, def)` | Constrain two bodies (or one body to the world) — see [Joints](#joints). |
+| `addGearJoint(hingeA, hingeB, ratio)` / `addRackAndPinionJoint(hinge, slider, ratio)` | Link two existing joints into a transmission. |
 | `removeJoint(j)` / `getJoints()` / `getJointsForBody(id)` | Remove / list live joints (lightweight `PhysicsJoint` handles). |
 | `setBodyMotionType(id, MotionType)` / `moveBodyKinematic(id, pos, rot, dt)` | Switch a body's motion type / drive a kinematic one — see [Kinematic bodies](#kinematic-bodies). |
 | `setBodyIsSensor(id, bool)` / `isBodySensor(id)` | Make a body a trigger (sensor) — see [Sensors (triggers)](#sensors-triggers). |
@@ -249,10 +250,16 @@ description (named factory + chainable options):
 | Factory | What it makes |
 |---------|---------------|
 | `Joint::point(worldPivot)` | Ball joint: pins the bodies at one point. Chains, ragdolls. |
-| `Joint::hinge(worldPivot, axis)` | Rotation around one axis. Doors, wheels. `.limits(min, max)` (rad). |
-| `Joint::slider(axis)` | Straight travel along an axis, no rotation. Pistons. `.limits(min, max)` (m). |
+| `Joint::hinge(worldPivot, axis)` | Rotation around one axis. Doors, wheels. `.limits(min, max)` (rad), `.motor(v)`. |
+| `Joint::slider(axis)` | Straight travel along an axis, no rotation. Pistons. `.limits(min, max)` (m), `.motor(v)`. |
 | `Joint::distance(anchorOnA, anchorOnB)` | Keeps two points at a distance. `.range(min, max)`, `.spring(hz, damping)`. |
 | `Joint::fixed()` | Welds the bodies in their current relative pose. |
+| `Joint::cone(worldPivot, axis, halfAngle)` | Ball joint whose swing is capped to a cone. |
+| `Joint::swingTwist(worldPivot, twistAxis)` | The ragdoll joint: `.swing(halfAngle)` cone + `.twist(min, max)`. Shoulders, hips. |
+
+**Order matters** for hinge/slider signs: in `world.addJoint(a, b, def)` `a` is the
+base and `b` moves positively; `rb->jointTo(other, def)` makes *other* the base, so
+**the calling body is the one that moves** ("joint the door TO the frame").
 
 The **node-level** way (RigidBody mod) is the main API:
 
@@ -276,6 +283,24 @@ for (auto& j : defaultWorld().getJoints()) j.drawWire();   // visualize all
 auto mine = rb->getJoints();                               // joints touching this body
 j.getAnchorA(); j.getAnchorB(); j.getAxis();               // live world-space values
 j.remove();                                                // explicit removal
+```
+
+**Motors** (hinge / slider) make joints *drive*:
+
+```cpp
+// spin forever (windmill): velocity motor from creation
+wheel->getMod<RigidBody>()->jointTo(post, Joint::hinge(hub, axis).motor(3.0f));
+
+// drive to a height (elevator): position motor at runtime
+auto j = platform->getMod<RigidBody>()->jointToWorld(Joint::slider({0,1,0}).limits(0, 1.8f));
+j.setMotorTarget(1.8f);          // ...later: j.setMotorTarget(0); j.setMotorOff();
+```
+
+**Transmissions** link two existing joints:
+
+```cpp
+defaultWorld().addGearJoint(hingeA, hingeB, /*ratio*/ 2.0f);          // wheels in lockstep
+defaultWorld().addRackAndPinionJoint(hinge, slider, /*rad per m*/ TAU / 0.5f);
 ```
 
 Removing a body (or destroying its node) **automatically removes every joint
@@ -365,6 +390,9 @@ hanging chain using Jolt constraints, with the `local.cmake` shown above.
 | `example-trigger/` | Sensor volume — cubes fall through a trigger box that counts occupants and glows. |
 | `example-kinematic/` | Kinematic movers — a sliding slab and a spinning paddle push the dynamic cubes around. |
 | `example-joints/` | Joints — a ball-jointed chain, a hinged door with limits, a springy distance pendulum, all drawn with `drawWire`. |
+| `example-motors/` | Motors — a windmill (hinge + velocity motor) and an elevator (slider + position motor). |
+| `example-ragdoll/` | Ragdolls — swing-twist shoulders/hips/neck + one-way hinge elbows/knees; toss them around. |
+| `example-gears/` | Transmissions — one motor drives a second wheel through a gear and a rack through a rack-and-pinion. |
 | `example-fixedTimestep/` | `updateAsyncStart` — a fixed 240 Hz step keeps a tall stack solid; per-frame (capped to 30 fps) wobbles and topples. |
 | `example-joltNativeAccess/` | The raw-Jolt escape hatch — a constraint-based chain. |
 

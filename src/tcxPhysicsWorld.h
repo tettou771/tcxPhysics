@@ -160,13 +160,27 @@ public:
     // owns every joint; the returned PhysicsJoint is a lightweight handle (copy
     // freely, query any time). Describe the joint with the Joint factories:
     //
-    //   auto j = world.addJoint(door, frame, Joint::hinge(edge, {0,1,0}).limits(-1.2f, 1.2f));
+    //   auto j = world.addJoint(frame, door, Joint::hinge(edge, {0,1,0}).limits(-1.2f, 1.2f));
     //   auto p = world.addJoint(ball, Joint::distance(ballPos, ceiling).spring(2, 0.2f));
+    //
+    // ORDER MATTERS for hinge/slider signs: `a` is the BASE, `b` is the side
+    // that moves positively (limits, angles, motor velocity/target are measured
+    // of b relative to a). The one-body overload joints `a` to the world with
+    // the world as the base, so positive values move `a`.
     //
     // A joint is removed explicitly (removeJoint) or AUTOMATICALLY when either
     // of its bodies is removed — it can never dangle.
     PhysicsJoint addJoint(const PhysicsBody& a, const PhysicsBody& b, const Joint& def);
     PhysicsJoint addJoint(const PhysicsBody& a, const Joint& def);   // a <-> the world
+
+    // Link two EXISTING joints into a transmission:
+    //   gear          - two hinges spin in lockstep. ratio = teethB / teethA
+    //                   (wheel A turns ratio times for one turn of wheel B).
+    //   rackAndPinion - a hinge (pinion) drives a slider (rack) and vice versa.
+    //                   ratio = radians of pinion rotation per metre of rack travel.
+    PhysicsJoint addGearJoint(const PhysicsJoint& hingeA, const PhysicsJoint& hingeB, float ratio = 1.0f);
+    PhysicsJoint addRackAndPinionJoint(const PhysicsJoint& pinionHinge, const PhysicsJoint& rackSlider, float ratio);
+
     void removeJoint(const PhysicsJoint& joint);
     std::vector<PhysicsJoint> getJoints() const;                     // all live joints
     std::vector<PhysicsJoint> getJointsForBody(uint32_t bodyId) const;
@@ -180,6 +194,10 @@ public:
     tc::Vec3 getJointAnchorB(uint64_t id) const;
     tc::Vec3 getJointAxis(uint64_t id) const;
     void removeJointById(uint64_t id);
+    // Motors (hinge: rad/s + N·m torque cap; slider: m/s + N force cap; -1 = unlimited).
+    void setJointMotorVelocity(uint64_t id, float velocity, float maxForce);
+    void setJointMotorTarget(uint64_t id, float target, float maxForce);
+    void setJointMotorOff(uint64_t id);
 
     // --- queries -------------------------------------------------------------
     // Cast a ray from `origin` along `direction` (need not be normalized) up to
@@ -263,6 +281,8 @@ private:
     std::shared_ptr<int> alive_ = std::make_shared<int>(0);
     // Shared by both addJoint overloads (idB == kInvalidId -> jointed to the world).
     PhysicsJoint addJointInternal(uint32_t idA, uint32_t idB, const Joint& def);
+    // Shared by the setJointMotor* methods (mode: 0 velocity, 1 target, 2 off).
+    void jointMotorCommand(uint64_t id, int mode, float value, float maxForce);
     // Drain worker-collected contacts and fire contactBegan/Ended (main thread).
     void dispatchContacts();
 #ifdef __EMSCRIPTEN__

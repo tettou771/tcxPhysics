@@ -29,6 +29,10 @@
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
+#include <Jolt/Physics/Constraints/ConeConstraint.h>
+#include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
+#include <Jolt/Physics/Constraints/GearConstraint.h>
+#include <Jolt/Physics/Constraints/RackAndPinionConstraint.h>
 #include <Jolt/Physics/Constraints/SpringSettings.h>
 
 // Compile the opt-in escape-hatch header here too, so it can never silently rot
@@ -283,6 +287,12 @@ struct PhysicsWorld::Impl {
         if (bodyId == 0xffffffffu) return local;
         JPH::BodyID bid(bodyId);
         return JPH::Vec3(bodies().GetPosition(bid)) + bodies().GetRotation(bid) * local;
+    }
+
+    // A joint's current world-space axis (stored local to its base body A).
+    JPH::Vec3 axisWorld(const JointRec& r) {
+        if (r.bodyA == 0xffffffffu) return r.localAxisA;
+        return bodies().GetRotation(JPH::BodyID(r.bodyA)) * r.localAxisA;
     }
 
     JPH::BodyInterface& bodies() { return physicsSystem.GetBodyInterface(); }
@@ -845,6 +855,34 @@ JPH::TwoBodyConstraint* createJoltConstraint(const Joint& def, JPH::Body& a, JPH
             s.mAutoDetectPoint = true;   // weld in the current relative pose
             return s.Create(a, b);
         }
+        case JointType::Cone: {
+            JPH::ConeConstraintSettings s;
+            s.mSpace  = JPH::EConstraintSpace::WorldSpace;
+            s.mPoint1 = s.mPoint2 = toJolt(def.anchorA);
+            JPH::Vec3 axis = JPH::Vec3(def.axis.x, def.axis.y, def.axis.z).Normalized();
+            s.mTwistAxis1 = s.mTwistAxis2 = axis;
+            s.mHalfConeAngle = def.coneAngle;
+            return s.Create(a, b);
+        }
+        case JointType::SwingTwist: {
+            JPH::SwingTwistConstraintSettings s;
+            s.mSpace     = JPH::EConstraintSpace::WorldSpace;
+            s.mPosition1 = s.mPosition2 = toJolt(def.anchorA);
+            JPH::Vec3 axis = JPH::Vec3(def.axis.x, def.axis.y, def.axis.z).Normalized();
+            s.mTwistAxis1 = s.mTwistAxis2 = axis;
+            JPH::Vec3 plane = axis.GetNormalizedPerpendicular();
+            s.mPlaneAxis1 = s.mPlaneAxis2 = plane;
+            // Circular swing cone (normal == plane half-angle).
+            s.mNormalHalfConeAngle = s.mPlaneHalfConeAngle = def.coneAngle;
+            s.mTwistMinAngle = def.twistMin;
+            s.mTwistMaxAngle = def.twistMax;
+            return s.Create(a, b);
+        }
+        case JointType::Gear:
+        case JointType::RackAndPinion:
+            // Built through addGearJoint / addRackAndPinionJoint (they connect
+            // two EXISTING joints), never through this path.
+            return nullptr;
     }
     return nullptr;
 }
@@ -873,49 +911,149 @@ PhysicsJoint PhysicsWorld::addJoint(const PhysicsBody& a, const Joint& def) {
         logWarning() << "tcxPhysics: addJoint needs a valid body.";
         return PhysicsJoint();
     }
-    return addJointInternal(a.getId(), PhysicsBody::kInvalidId, def);
+    // The world is the BASE (Jolt body 1): positive motor values then drive `a`
+    // along/around the axis, which is what you expect of "jointed to the world".
+    return addJointInternal(PhysicsBody::kInvalidId, a.getId(), def);
 }
 
 PhysicsJoint PhysicsWorld::addJointInternal(uint32_t idA, uint32_t idB, const Joint& def) {
-    TC_LOCK_GUARD(impl_->simMutex);
-    auto& sys = impl_->physicsSystem;
-    const JPH::BodyLockInterface& lockIf = sys.GetBodyLockInterface();
+    uint64_t jointId = 0;
+    {
+        TC_LOCK_GUARD(impl_->simMutex);
+        auto& sys = impl_->physicsSystem;
+        const JPH::BodyLockInterface& lockIf = sys.GetBodyLockInterface();
 
-    JPH::BodyLockWrite la(lockIf, JPH::BodyID(idA));
-    if (!la.Succeeded()) return PhysicsJoint();
-    JPH::Body& bodyA = la.GetBody();
+        // Either side may be the immovable world body (invalid id), never both.
+        // Jolt convention: relative measures (hinge angle, slider position, motor
+        // drive) are of body 2 RELATIVE TO body 1 — so body A is the "base" and
+        // body B is the side that moves positively.
+        JPH::Body* bodyA = &JPH::Body::sFixedToWorld;
+        JPH::Body* bodyB = &JPH::Body::sFixedToWorld;
+        std::optional<JPH::BodyLockWrite> la, lb;
+        if (idA != PhysicsBody::kInvalidId) {
+            la.emplace(lockIf, JPH::BodyID(idA));
+            if (!la->Succeeded()) return PhysicsJoint();
+            bodyA = &la->GetBody();
+        }
+        if (idB != PhysicsBody::kInvalidId) {
+            lb.emplace(lockIf, JPH::BodyID(idB));
+            if (!lb->Succeeded()) return PhysicsJoint();
+            bodyB = &lb->GetBody();
+        }
 
-    // Second body, or the immovable world body for the one-body overload.
-    JPH::Body* bodyB = &JPH::Body::sFixedToWorld;
-    std::optional<JPH::BodyLockWrite> lb;
-    if (idB != PhysicsBody::kInvalidId) {
-        lb.emplace(lockIf, JPH::BodyID(idB));
-        if (!lb->Succeeded()) return PhysicsJoint();
-        bodyB = &lb->GetBody();
+        JPH::TwoBodyConstraint* c = createJoltConstraint(def, *bodyA, *bodyB);
+        if (!c) return PhysicsJoint();
+        sys.AddConstraint(c);   // Jolt ref-counts and simulates it from here
+
+        Impl::JointRec rec;
+        rec.id    = impl_->nextJointId++;
+        rec.constraint = c;
+        rec.bodyA = idA;
+        rec.bodyB = idB;
+        rec.type  = def.type;
+        // Display anchors: the explicit ones for point/hinge/distance; the bodies'
+        // poses at creation for the auto-detected types (slider / fixed).
+        bool autoDetect = (def.type == JointType::Slider || def.type == JointType::Fixed);
+        JPH::Vec3 wa = autoDetect ? JPH::Vec3(bodyA->GetPosition()) : JPH::Vec3(toJolt(def.anchorA));
+        JPH::Vec3 wb = autoDetect ? JPH::Vec3(bodyB->GetPosition()) : JPH::Vec3(toJolt(def.anchorB));
+        if (autoDetect && idA == PhysicsBody::kInvalidId) wa = wb;   // world base: show at B
+        if (autoDetect && idB == PhysicsBody::kInvalidId) wb = wa;
+        rec.localAnchorA = toLocalPoint(*bodyA, wa);
+        rec.localAnchorB = toLocalPoint(*bodyB, wb);
+        rec.localAxisA   = toLocalDir(*bodyA, JPH::Vec3(def.axis.x, def.axis.y, def.axis.z).Normalized());
+        impl_->joints.push_back(rec);
+        jointId = rec.id;
+    }   // body locks released here — the motor command below re-locks via ActivateBody
+
+    // Creation-time motor (Joint::hinge(...).motor(velocity)).
+    if (def.hasMotor) jointMotorCommand(jointId, 0, def.motorVelocity, def.motorMaxForce);
+
+    return PhysicsJoint(this, jointId, alive_);
+}
+
+PhysicsJoint PhysicsWorld::addGearJoint(const PhysicsJoint& hingeA, const PhysicsJoint& hingeB, float ratio) {
+    if (!impl_->initialized) return PhysicsJoint();
+    uint64_t jointId = 0;
+    {
+        TC_LOCK_GUARD(impl_->simMutex);
+        auto* ra = impl_->find(hingeA.getId());
+        auto* rb = impl_->find(hingeB.getId());
+        if (!ra || !rb || ra->type != JointType::Hinge || rb->type != JointType::Hinge) {
+            logWarning() << "tcxPhysics: addGearJoint needs two live HINGE joints.";
+            return PhysicsJoint();
+        }
+        // The wheels are the moving sides (body B) of each hinge.
+        uint32_t wheelA = ra->bodyB, wheelB = rb->bodyB;
+        const JPH::BodyLockInterface& lockIf = impl_->physicsSystem.GetBodyLockInterface();
+        JPH::BodyLockWrite la(lockIf, JPH::BodyID(wheelA));
+        JPH::BodyLockWrite lb(lockIf, JPH::BodyID(wheelB));
+        if (!la.Succeeded() || !lb.Succeeded()) return PhysicsJoint();
+
+        JPH::GearConstraintSettings s;
+        s.mSpace      = JPH::EConstraintSpace::WorldSpace;
+        s.mHingeAxis1 = impl_->axisWorld(*ra);
+        s.mHingeAxis2 = impl_->axisWorld(*rb);
+        s.mRatio      = ratio;
+        auto* c = static_cast<JPH::GearConstraint*>(s.Create(la.GetBody(), lb.GetBody()));
+        // Knowing the hinges lets Jolt correct angular drift between the wheels.
+        c->SetConstraints(ra->constraint.GetPtr(), rb->constraint.GetPtr());
+        impl_->physicsSystem.AddConstraint(c);
+
+        Impl::JointRec rec;
+        rec.id = impl_->nextJointId++;
+        rec.constraint = c;
+        rec.bodyA = wheelA;
+        rec.bodyB = wheelB;
+        rec.type  = JointType::Gear;
+        rec.localAnchorA = JPH::Vec3::sZero();   // draw between the wheel centres
+        rec.localAnchorB = JPH::Vec3::sZero();
+        rec.localAxisA   = ra->localAxisA;
+        impl_->joints.push_back(rec);
+        jointId = rec.id;
     }
+    return PhysicsJoint(this, jointId, alive_);
+}
 
-    JPH::TwoBodyConstraint* c = createJoltConstraint(def, bodyA, *bodyB);
-    if (!c) return PhysicsJoint();
-    sys.AddConstraint(c);   // Jolt ref-counts and simulates it from here
+PhysicsJoint PhysicsWorld::addRackAndPinionJoint(const PhysicsJoint& pinionHinge,
+                                                 const PhysicsJoint& rackSlider, float ratio) {
+    if (!impl_->initialized) return PhysicsJoint();
+    uint64_t jointId = 0;
+    {
+        TC_LOCK_GUARD(impl_->simMutex);
+        auto* rp = impl_->find(pinionHinge.getId());
+        auto* rr = impl_->find(rackSlider.getId());
+        if (!rp || !rr || rp->type != JointType::Hinge || rr->type != JointType::Slider) {
+            logWarning() << "tcxPhysics: addRackAndPinionJoint needs a HINGE (pinion) and a SLIDER (rack).";
+            return PhysicsJoint();
+        }
+        uint32_t pinion = rp->bodyB, rack = rr->bodyB;   // the moving sides
+        const JPH::BodyLockInterface& lockIf = impl_->physicsSystem.GetBodyLockInterface();
+        JPH::BodyLockWrite la(lockIf, JPH::BodyID(pinion));
+        JPH::BodyLockWrite lb(lockIf, JPH::BodyID(rack));
+        if (!la.Succeeded() || !lb.Succeeded()) return PhysicsJoint();
 
-    Impl::JointRec rec;
-    rec.id    = impl_->nextJointId++;
-    rec.constraint = c;
-    rec.bodyA = idA;
-    rec.bodyB = idB;
-    rec.type  = def.type;
-    // Display anchors: the explicit ones for point/hinge/distance; the bodies'
-    // poses at creation for the auto-detected types (slider / fixed).
-    bool autoDetect = (def.type == JointType::Slider || def.type == JointType::Fixed);
-    JPH::Vec3 wa = autoDetect ? JPH::Vec3(bodyA.GetPosition()) : JPH::Vec3(toJolt(def.anchorA));
-    JPH::Vec3 wb = autoDetect ? JPH::Vec3(bodyB->GetPosition()) : JPH::Vec3(toJolt(def.anchorB));
-    if (autoDetect && idB == PhysicsBody::kInvalidId) wb = wa;   // world side: show at A
-    rec.localAnchorA = toLocalPoint(bodyA, wa);
-    rec.localAnchorB = toLocalPoint(*bodyB, wb);
-    rec.localAxisA   = toLocalDir(bodyA, JPH::Vec3(def.axis.x, def.axis.y, def.axis.z).Normalized());
-    impl_->joints.push_back(rec);
+        JPH::RackAndPinionConstraintSettings s;
+        s.mSpace      = JPH::EConstraintSpace::WorldSpace;
+        s.mHingeAxis  = impl_->axisWorld(*rp);
+        s.mSliderAxis = impl_->axisWorld(*rr);
+        s.mRatio      = ratio;
+        auto* c = static_cast<JPH::RackAndPinionConstraint*>(s.Create(la.GetBody(), lb.GetBody()));
+        c->SetConstraints(rp->constraint.GetPtr(), rr->constraint.GetPtr());
+        impl_->physicsSystem.AddConstraint(c);
 
-    return PhysicsJoint(this, rec.id, alive_);
+        Impl::JointRec rec;
+        rec.id = impl_->nextJointId++;
+        rec.constraint = c;
+        rec.bodyA = pinion;
+        rec.bodyB = rack;
+        rec.type  = JointType::RackAndPinion;
+        rec.localAnchorA = JPH::Vec3::sZero();
+        rec.localAnchorB = JPH::Vec3::sZero();
+        rec.localAxisA   = rp->localAxisA;
+        impl_->joints.push_back(rec);
+        jointId = rec.id;
+    }
+    return PhysicsJoint(this, jointId, alive_);
 }
 
 void PhysicsWorld::removeJoint(const PhysicsJoint& joint) {
@@ -1001,8 +1139,53 @@ Vec3 PhysicsWorld::getJointAxis(uint64_t id) const {
     TC_LOCK_GUARD(impl_->simMutex);
     auto* r = impl_->find(id);
     if (!r) return Vec3(0, 1, 0);
+    if (r->bodyA == PhysicsBody::kInvalidId) return toTc(r->localAxisA);  // world base
     JPH::Quat rot = impl_->bodies().GetRotation(JPH::BodyID(r->bodyA));
     return toTc(rot * r->localAxisA);
+}
+
+// --- joint motors ------------------------------------------------------------
+// mode: 0 = drive at velocity, 1 = drive to target, 2 = off.
+void PhysicsWorld::jointMotorCommand(uint64_t id, int mode, float value, float maxForce) {
+    if (!impl_->initialized) return;
+    TC_LOCK_GUARD(impl_->simMutex);
+    auto* r = impl_->find(id);
+    if (!r) return;
+
+    JPH::EMotorState state = (mode == 0) ? JPH::EMotorState::Velocity
+                           : (mode == 1) ? JPH::EMotorState::Position
+                                         : JPH::EMotorState::Off;
+    if (r->type == JointType::Hinge) {
+        auto* h = static_cast<JPH::HingeConstraint*>(r->constraint.GetPtr());
+        if (maxForce >= 0.0f) h->GetMotorSettings().SetTorqueLimit(maxForce);
+        if (mode == 0) h->SetTargetAngularVelocity(value);
+        if (mode == 1) h->SetTargetAngle(value);
+        h->SetMotorState(state);
+    } else if (r->type == JointType::Slider) {
+        auto* s = static_cast<JPH::SliderConstraint*>(r->constraint.GetPtr());
+        if (maxForce >= 0.0f) s->GetMotorSettings().SetForceLimit(maxForce);
+        if (mode == 0) s->SetTargetVelocity(value);
+        if (mode == 1) s->SetTargetPosition(value);
+        s->SetMotorState(state);
+    } else {
+        logWarning() << "tcxPhysics: only hinge / slider joints have a motor.";
+        return;
+    }
+    // Wake both bodies so the drive takes effect immediately.
+    if (r->bodyA != PhysicsBody::kInvalidId) impl_->bodies().ActivateBody(JPH::BodyID(r->bodyA));
+    if (r->bodyB != PhysicsBody::kInvalidId) impl_->bodies().ActivateBody(JPH::BodyID(r->bodyB));
+}
+
+void PhysicsWorld::setJointMotorVelocity(uint64_t id, float velocity, float maxForce) {
+    jointMotorCommand(id, 0, velocity, maxForce);
+}
+
+void PhysicsWorld::setJointMotorTarget(uint64_t id, float target, float maxForce) {
+    jointMotorCommand(id, 1, target, maxForce);
+}
+
+void PhysicsWorld::setJointMotorOff(uint64_t id) {
+    jointMotorCommand(id, 2, 0.0f, -1.0f);
 }
 
 Vec3 PhysicsWorld::getBodyPosition(uint32_t id) const {

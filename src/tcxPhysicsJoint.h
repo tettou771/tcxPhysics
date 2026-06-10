@@ -23,7 +23,7 @@ class PhysicsWorld;
 // the world, so there is no lifetime to manage on the caller's side.
 // =============================================================================
 
-enum class JointType { Point, Hinge, Slider, Distance, Fixed };
+enum class JointType { Point, Hinge, Slider, Distance, Fixed, Cone, SwingTwist, Gear, RackAndPinion };
 
 // What to build. All positions / axes are WORLD-space at creation time —
 // place your bodies first, then describe the joint where it should bite.
@@ -37,6 +37,10 @@ struct Joint {
     float minDist = -1.0f, maxDist = -1.0f;        // distance (-1 = current)
     float springHz = 0.0f, springDamping = 0.0f;   // distance spring
     bool  hasSpring = false;
+    float motorVelocity = 0.0f, motorMaxForce = -1.0f;  // hinge / slider motor
+    bool  hasMotor = false;
+    float coneAngle = 0.0f;                             // cone / swingTwist swing (rad, half-angle)
+    float twistMin = 0.0f, twistMax = 0.0f;             // swingTwist twist range (rad)
 
     // A ball joint: pins the two bodies together at one world point. Chains,
     // ragdoll joints, pendulums.
@@ -64,6 +68,18 @@ struct Joint {
     static Joint fixed() {
         Joint j; j.type = JointType::Fixed; return j;
     }
+    // A ball joint whose swing is capped to a cone of halfAngle around `axis`.
+    // Like point(), but the body can't fold back on itself.
+    static Joint cone(const tc::Vec3& worldPivot, const tc::Vec3& axis, float halfAngle) {
+        Joint j; j.type = JointType::Cone;
+        j.anchorA = j.anchorB = worldPivot; j.axis = axis; j.coneAngle = halfAngle; return j;
+    }
+    // The ragdoll joint: swing capped to a cone around `twistAxis` PLUS a limit
+    // on the twist around it. Shoulders, hips, necks. See swing() / twist().
+    static Joint swingTwist(const tc::Vec3& worldPivot, const tc::Vec3& twistAxis) {
+        Joint j; j.type = JointType::SwingTwist;
+        j.anchorA = j.anchorB = worldPivot; j.axis = twistAxis; return j;
+    }
 
     // --- chainable options ---------------------------------------------------
     // hinge: angle range in radians (min in [-pi,0], max in [0,pi]).
@@ -73,6 +89,14 @@ struct Joint {
     Joint& range(float min, float max) { minDist = min; maxDist = max; return *this; }
     // distance: make the limits springy instead of hard (frequency Hz, damping 0..1).
     Joint& spring(float hz, float damping) { springHz = hz; springDamping = damping; hasSpring = true; return *this; }
+    // hinge / slider: drive at a constant velocity from the start (rad/s or m/s).
+    // maxForce caps the motor's torque (N·m) / force (N); -1 = unlimited.
+    // For position-mode driving use PhysicsJoint::setMotorTarget() at runtime.
+    Joint& motor(float velocity, float maxForce = -1.0f) { motorVelocity = velocity; motorMaxForce = maxForce; hasMotor = true; return *this; }
+    // swingTwist: half-angle of the swing cone around the twist axis (rad).
+    Joint& swing(float halfAngle) { coneAngle = halfAngle; return *this; }
+    // swingTwist: allowed twist range around the twist axis (rad, in [-pi, pi]).
+    Joint& twist(float min, float max) { twistMin = min; twistMax = max; return *this; }
 };
 
 // A handle to one live joint. Owns nothing; all accessors query the world.
@@ -87,14 +111,24 @@ public:
     bool isValid() const;
 
     JointType getType() const;
+    // A is the BASE, B the side that moves positively (see PhysicsWorld::addJoint).
+    // The side that is "the world" reports an invalid handle.
     PhysicsBody getBodyA() const;
-    PhysicsBody getBodyB() const;        // invalid handle if jointed to the world
+    PhysicsBody getBodyB() const;
     // Current WORLD-space attachment points (they move with the bodies).
     tc::Vec3 getAnchorA() const;
     tc::Vec3 getAnchorB() const;
     tc::Vec3 getAxis() const;            // current world axis (hinge / slider)
 
     uint64_t getId() const { return id_; }
+
+    // --- motor (hinge / slider only; warns on other types) -------------------
+    // Drive at a velocity: rad/s (hinge) or m/s (slider). Wakes the bodies.
+    const PhysicsJoint& setMotorVelocity(float velocity, float maxForce = -1.0f) const;
+    // Drive toward a target: angle in rad (hinge) or position in m (slider).
+    const PhysicsJoint& setMotorTarget(float target, float maxForce = -1.0f) const;
+    // Cut the drive (the joint itself stays).
+    const PhysicsJoint& setMotorOff() const;
 
     // Remove this joint from its world (the bodies stay).
     void remove();

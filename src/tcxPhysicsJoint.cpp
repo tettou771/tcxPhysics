@@ -42,6 +42,21 @@ tc::Vec3 PhysicsJoint::getAxis() const {
     return world_->getJointAxis(id_);
 }
 
+const PhysicsJoint& PhysicsJoint::setMotorVelocity(float velocity, float maxForce) const {
+    if (worldOk()) world_->setJointMotorVelocity(id_, velocity, maxForce);
+    return *this;
+}
+
+const PhysicsJoint& PhysicsJoint::setMotorTarget(float target, float maxForce) const {
+    if (worldOk()) world_->setJointMotorTarget(id_, target, maxForce);
+    return *this;
+}
+
+const PhysicsJoint& PhysicsJoint::setMotorOff() const {
+    if (worldOk()) world_->setJointMotorOff(id_);
+    return *this;
+}
+
 void PhysicsJoint::remove() {
     if (worldOk()) world_->removeJointById(id_);
 }
