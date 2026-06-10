@@ -96,6 +96,8 @@ cube count and FPS readout.
 | `removeBody(body)` | Remove one body. |
 | `clearDynamicBodies()` | Remove every dynamic body, keep static scenery. |
 | `getNumBodies()` | Total body count. |
+| `addJoint(a, b, def)` / `addJoint(a, def)` | Constrain two bodies (or one body to the world) — see [Joints](#joints). |
+| `removeJoint(j)` / `getJoints()` / `getJointsForBody(id)` | Remove / list live joints (lightweight `PhysicsJoint` handles). |
 | `setBodyMotionType(id, MotionType)` / `moveBodyKinematic(id, pos, rot, dt)` | Switch a body's motion type / drive a kinematic one — see [Kinematic bodies](#kinematic-bodies). |
 | `setBodyIsSensor(id, bool)` / `isBodySensor(id)` | Make a body a trigger (sensor) — see [Sensors (triggers)](#sensors-triggers). |
 | `updateAsyncStart(hz = 120)` / `updateAsyncStop()` / `isAsync()` | Step on a fixed-timestep clock — see [Async stepping](#async-stepping). |
@@ -239,6 +241,56 @@ Example: `example-kinematic/`.
 
 ---
 
+## Joints
+
+Constrain two bodies to each other — or one body to the world — with a `Joint`
+description (named factory + chainable options):
+
+| Factory | What it makes |
+|---------|---------------|
+| `Joint::point(worldPivot)` | Ball joint: pins the bodies at one point. Chains, ragdolls. |
+| `Joint::hinge(worldPivot, axis)` | Rotation around one axis. Doors, wheels. `.limits(min, max)` (rad). |
+| `Joint::slider(axis)` | Straight travel along an axis, no rotation. Pistons. `.limits(min, max)` (m). |
+| `Joint::distance(anchorOnA, anchorOnB)` | Keeps two points at a distance. `.range(min, max)`, `.spring(hz, damping)`. |
+| `Joint::fixed()` | Welds the bodies in their current relative pose. |
+
+The **node-level** way (RigidBody mod) is the main API:
+
+```cpp
+// door / frame are Nodes with a RigidBody mod each
+door->getMod<RigidBody>()->jointTo(frame,
+    Joint::hinge(edgePos, Vec3(0, 1, 0)).limits(-TAU/4, TAU/4));
+
+// hang a ball from the air, springy
+ball->getMod<RigidBody>()->jointToWorld(
+    Joint::distance(ballPos, hook).spring(2.0f, 0.2f));
+```
+
+The **world-level** way takes raw bodies (`world.addJoint(a, b, def)`).
+
+The world owns every joint and hands out `PhysicsJoint` **handles** (world + id,
+like `PhysicsBody`): copy them freely, nothing to manage. Query them any time:
+
+```cpp
+for (auto& j : defaultWorld().getJoints()) j.drawWire();   // visualize all
+auto mine = rb->getJoints();                               // joints touching this body
+j.getAnchorA(); j.getAnchorB(); j.getAxis();               // live world-space values
+j.remove();                                                // explicit removal
+```
+
+Removing a body (or destroying its node) **automatically removes every joint
+touching it** — a joint can never dangle.
+
+**Timing note:** both bodies must exist when you wire a joint. A RigidBody added
+inside a Node subclass's `setup()` is only created on the node's first frame —
+wire joints the frame after spawning, or add the mods from app code
+(`node->addMod<RigidBody>(...)` creates the body immediately).
+
+Example: `example-joints/`. (For constraint types not wrapped yet —
+cone, 6-DOF, motors — use the [raw Jolt escape hatch](#advanced-raw-jolt-escape-hatch).)
+
+---
+
 ## Async stepping
 
 By default you step the sim yourself with `update(dt)`. Alternatively, run it on
@@ -312,6 +364,7 @@ hanging chain using Jolt constraints, with the `local.cmake` shown above.
 | `example-raycast/` | `raycast` — mouse-pick the body under the cursor (highlight, hit point + normal), SPACE to shoot it. |
 | `example-trigger/` | Sensor volume — cubes fall through a trigger box that counts occupants and glows. |
 | `example-kinematic/` | Kinematic movers — a sliding slab and a spinning paddle push the dynamic cubes around. |
+| `example-joints/` | Joints — a ball-jointed chain, a hinged door with limits, a springy distance pendulum, all drawn with `drawWire`. |
 | `example-fixedTimestep/` | `updateAsyncStart` — a fixed 240 Hz step keeps a tall stack solid; per-frame (capped to 30 fps) wobbles and topples. |
 | `example-joltNativeAccess/` | The raw-Jolt escape hatch — a constraint-based chain. |
 

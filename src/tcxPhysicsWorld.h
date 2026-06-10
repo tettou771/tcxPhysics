@@ -3,7 +3,9 @@
 #include <TrussC.h>
 #include <memory>
 #include <cstdint>
+#include <vector>
 #include "tcxPhysicsBody.h"
+#include "tcxPhysicsJoint.h"
 
 namespace tcx {
 
@@ -153,6 +155,32 @@ public:
     // A large flat static box acting as the ground, centered on (0, y, 0).
     PhysicsBody addGroundPlane(float y = 0.0f, float size = 100000.0f);
 
+    // --- joints ----------------------------------------------------------------
+    // Constrain two bodies to each other (or one body to the world). The world
+    // owns every joint; the returned PhysicsJoint is a lightweight handle (copy
+    // freely, query any time). Describe the joint with the Joint factories:
+    //
+    //   auto j = world.addJoint(door, frame, Joint::hinge(edge, {0,1,0}).limits(-1.2f, 1.2f));
+    //   auto p = world.addJoint(ball, Joint::distance(ballPos, ceiling).spring(2, 0.2f));
+    //
+    // A joint is removed explicitly (removeJoint) or AUTOMATICALLY when either
+    // of its bodies is removed — it can never dangle.
+    PhysicsJoint addJoint(const PhysicsBody& a, const PhysicsBody& b, const Joint& def);
+    PhysicsJoint addJoint(const PhysicsBody& a, const Joint& def);   // a <-> the world
+    void removeJoint(const PhysicsJoint& joint);
+    std::vector<PhysicsJoint> getJoints() const;                     // all live joints
+    std::vector<PhysicsJoint> getJointsForBody(uint32_t bodyId) const;
+
+    // --- queried / driven by PhysicsJoint (you rarely call these directly) ---
+    bool hasJoint(uint64_t id) const;
+    JointType getJointType(uint64_t id) const;
+    uint32_t getJointBodyA(uint64_t id) const;   // kInvalidId = jointed to the world
+    uint32_t getJointBodyB(uint64_t id) const;
+    tc::Vec3 getJointAnchorA(uint64_t id) const; // current world-space attachment
+    tc::Vec3 getJointAnchorB(uint64_t id) const;
+    tc::Vec3 getJointAxis(uint64_t id) const;
+    void removeJointById(uint64_t id);
+
     // --- queries -------------------------------------------------------------
     // Cast a ray from `origin` along `direction` (need not be normalized) up to
     // maxDistance, returning the CLOSEST body hit. Use for mouse picking (build
@@ -233,6 +261,8 @@ public:
 
 private:
     std::shared_ptr<int> alive_ = std::make_shared<int>(0);
+    // Shared by both addJoint overloads (idB == kInvalidId -> jointed to the world).
+    PhysicsJoint addJointInternal(uint32_t idA, uint32_t idB, const Joint& def);
     // Drain worker-collected contacts and fire contactBegan/Ended (main thread).
     void dispatchContacts();
 #ifdef __EMSCRIPTEN__

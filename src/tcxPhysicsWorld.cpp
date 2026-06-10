@@ -23,6 +23,13 @@
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
+#include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
+#include <Jolt/Physics/Constraints/PointConstraint.h>
+#include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/SliderConstraint.h>
+#include <Jolt/Physics/Constraints/DistanceConstraint.h>
+#include <Jolt/Physics/Constraints/FixedConstraint.h>
+#include <Jolt/Physics/Constraints/SpringSettings.h>
 
 // Compile the opt-in escape-hatch header here too, so it can never silently rot
 // (it's inline-only — no ODR/runtime cost). Jolt is already on the path in this TU.
@@ -31,6 +38,7 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
+#include <optional>
 #include <functional>
 #include <algorithm>
 #include <vector>
@@ -233,6 +241,49 @@ struct PhysicsWorld::Impl {
     ContactListenerImpl contactListener;
 
     vector<JPH::BodyID> dynamicBodies; // tracked so clearDynamicBodies() works
+
+    // --- joint registry ------------------------------------------------------
+    // The world owns every joint: the Jolt constraint (ref-counted) plus what a
+    // PhysicsJoint handle can ask for. Anchors / axis are stored LOCAL to their
+    // body at creation, so the world-space accessors track the moving bodies.
+    // bodyB == kInvalidId means "jointed to the world" (JPH::Body::sFixedToWorld).
+    struct JointRec {
+        uint64_t id = 0;
+        JPH::Ref<JPH::Constraint> constraint;
+        uint32_t bodyA = 0xffffffffu;
+        uint32_t bodyB = 0xffffffffu;
+        JointType type = JointType::Point;
+        JPH::Vec3 localAnchorA = JPH::Vec3::sZero();  // local to bodyA
+        JPH::Vec3 localAnchorB = JPH::Vec3::sZero();  // local to bodyB (world if none)
+        JPH::Vec3 localAxisA = JPH::Vec3::sAxisY();   // local to bodyA
+    };
+    vector<JointRec> joints;
+    uint64_t nextJointId = 1;
+
+    // Remove every joint touching `bodyId` (called BEFORE that body is
+    // destroyed — a Jolt constraint must never outlive its bodies).
+    void removeJointsTouching(uint32_t bodyId) {
+        for (auto it = joints.begin(); it != joints.end();) {
+            if (it->bodyA == bodyId || it->bodyB == bodyId) {
+                physicsSystem.RemoveConstraint(it->constraint.GetPtr());
+                it = joints.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    JointRec* find(uint64_t id) {
+        for (auto& r : joints) if (r.id == id) return &r;
+        return nullptr;   // linear scan — joint counts are small
+    }
+
+    // Local anchor -> current world position (world-fixed side stores world).
+    JPH::Vec3 anchorWorld(uint32_t bodyId, const JPH::Vec3& local) {
+        if (bodyId == 0xffffffffu) return local;
+        JPH::BodyID bid(bodyId);
+        return JPH::Vec3(bodies().GetPosition(bid)) + bodies().GetRotation(bid) * local;
+    }
 
     JPH::BodyInterface& bodies() { return physicsSystem.GetBodyInterface(); }
     const JPH::BodyInterface& bodies() const { return physicsSystem.GetBodyInterface(); }
@@ -714,6 +765,9 @@ void PhysicsWorld::removeBody(const PhysicsBody& body) {
     if (!impl_->initialized || !body.isValid()) return;
     TC_LOCK_GUARD(impl_->simMutex);
     JPH::BodyID id(body.getId());
+    // Joints touching this body must go first (a constraint must never
+    // outlive its bodies).
+    impl_->removeJointsTouching(body.getId());
     impl_->bodies().RemoveBody(id);
     impl_->bodies().DestroyBody(id);
     auto& v = impl_->dynamicBodies;
@@ -724,6 +778,7 @@ void PhysicsWorld::clearDynamicBodies() {
     if (!impl_->initialized) return;
     TC_LOCK_GUARD(impl_->simMutex);
     for (JPH::BodyID id : impl_->dynamicBodies) {
+        impl_->removeJointsTouching(id.GetIndexAndSequenceNumber());
         impl_->bodies().RemoveBody(id);
         impl_->bodies().DestroyBody(id);
     }
@@ -733,6 +788,221 @@ void PhysicsWorld::clearDynamicBodies() {
 int PhysicsWorld::getNumBodies() const {
     if (!impl_->initialized) return 0;
     return (int)impl_->physicsSystem.GetNumBodies();
+}
+
+// ---------------------------------------------------------------------------
+// Joints
+// ---------------------------------------------------------------------------
+namespace {
+
+// Build the Jolt constraint described by `def` between two locked bodies.
+// Everything is WorldSpace — matching the Joint factories' contract.
+JPH::TwoBodyConstraint* createJoltConstraint(const Joint& def, JPH::Body& a, JPH::Body& b) {
+    switch (def.type) {
+        case JointType::Point: {
+            JPH::PointConstraintSettings s;
+            s.mSpace  = JPH::EConstraintSpace::WorldSpace;
+            s.mPoint1 = s.mPoint2 = toJolt(def.anchorA);
+            return s.Create(a, b);
+        }
+        case JointType::Hinge: {
+            JPH::HingeConstraintSettings s;
+            s.mSpace  = JPH::EConstraintSpace::WorldSpace;
+            s.mPoint1 = s.mPoint2 = toJolt(def.anchorA);
+            JPH::Vec3 axis = JPH::Vec3(def.axis.x, def.axis.y, def.axis.z).Normalized();
+            s.mHingeAxis1  = s.mHingeAxis2  = axis;
+            s.mNormalAxis1 = s.mNormalAxis2 = axis.GetNormalizedPerpendicular();
+            if (def.hasLimits) {
+                s.mLimitsMin = std::max(-JPH::JPH_PI, def.limitMin);
+                s.mLimitsMax = std::min( JPH::JPH_PI, def.limitMax);
+            }
+            return s.Create(a, b);
+        }
+        case JointType::Slider: {
+            JPH::SliderConstraintSettings s;
+            s.mSpace = JPH::EConstraintSpace::WorldSpace;
+            s.mAutoDetectPoint = true;   // attach at the bodies' current poses
+            s.SetSliderAxis(JPH::Vec3(def.axis.x, def.axis.y, def.axis.z).Normalized());
+            if (def.hasLimits) { s.mLimitsMin = def.limitMin; s.mLimitsMax = def.limitMax; }
+            return s.Create(a, b);
+        }
+        case JointType::Distance: {
+            JPH::DistanceConstraintSettings s;
+            s.mSpace  = JPH::EConstraintSpace::WorldSpace;
+            s.mPoint1 = toJolt(def.anchorA);
+            s.mPoint2 = toJolt(def.anchorB);
+            s.mMinDistance = def.minDist;   // negative = use the creation distance
+            s.mMaxDistance = def.maxDist;
+            if (def.hasSpring) {
+                s.mLimitsSpringSettings.mFrequency = def.springHz;
+                s.mLimitsSpringSettings.mDamping   = def.springDamping;
+            }
+            return s.Create(a, b);
+        }
+        case JointType::Fixed: {
+            JPH::FixedConstraintSettings s;
+            s.mSpace = JPH::EConstraintSpace::WorldSpace;
+            s.mAutoDetectPoint = true;   // weld in the current relative pose
+            return s.Create(a, b);
+        }
+    }
+    return nullptr;
+}
+
+// World point/dir -> a body's local space. For JPH::Body::sFixedToWorld
+// (identity pose) this is a no-op, so the world-fixed side stores world values.
+inline JPH::Vec3 toLocalPoint(const JPH::Body& body, const JPH::Vec3& worldPoint) {
+    return body.GetRotation().Conjugated() * (worldPoint - JPH::Vec3(body.GetPosition()));
+}
+inline JPH::Vec3 toLocalDir(const JPH::Body& body, const JPH::Vec3& worldDir) {
+    return body.GetRotation().Conjugated() * worldDir;
+}
+
+} // anonymous namespace
+
+PhysicsJoint PhysicsWorld::addJoint(const PhysicsBody& a, const PhysicsBody& b, const Joint& def) {
+    if (!impl_->initialized || !a.isValid() || !b.isValid()) {
+        logWarning() << "tcxPhysics: addJoint needs two valid bodies.";
+        return PhysicsJoint();
+    }
+    return addJointInternal(a.getId(), b.getId(), def);
+}
+
+PhysicsJoint PhysicsWorld::addJoint(const PhysicsBody& a, const Joint& def) {
+    if (!impl_->initialized || !a.isValid()) {
+        logWarning() << "tcxPhysics: addJoint needs a valid body.";
+        return PhysicsJoint();
+    }
+    return addJointInternal(a.getId(), PhysicsBody::kInvalidId, def);
+}
+
+PhysicsJoint PhysicsWorld::addJointInternal(uint32_t idA, uint32_t idB, const Joint& def) {
+    TC_LOCK_GUARD(impl_->simMutex);
+    auto& sys = impl_->physicsSystem;
+    const JPH::BodyLockInterface& lockIf = sys.GetBodyLockInterface();
+
+    JPH::BodyLockWrite la(lockIf, JPH::BodyID(idA));
+    if (!la.Succeeded()) return PhysicsJoint();
+    JPH::Body& bodyA = la.GetBody();
+
+    // Second body, or the immovable world body for the one-body overload.
+    JPH::Body* bodyB = &JPH::Body::sFixedToWorld;
+    std::optional<JPH::BodyLockWrite> lb;
+    if (idB != PhysicsBody::kInvalidId) {
+        lb.emplace(lockIf, JPH::BodyID(idB));
+        if (!lb->Succeeded()) return PhysicsJoint();
+        bodyB = &lb->GetBody();
+    }
+
+    JPH::TwoBodyConstraint* c = createJoltConstraint(def, bodyA, *bodyB);
+    if (!c) return PhysicsJoint();
+    sys.AddConstraint(c);   // Jolt ref-counts and simulates it from here
+
+    Impl::JointRec rec;
+    rec.id    = impl_->nextJointId++;
+    rec.constraint = c;
+    rec.bodyA = idA;
+    rec.bodyB = idB;
+    rec.type  = def.type;
+    // Display anchors: the explicit ones for point/hinge/distance; the bodies'
+    // poses at creation for the auto-detected types (slider / fixed).
+    bool autoDetect = (def.type == JointType::Slider || def.type == JointType::Fixed);
+    JPH::Vec3 wa = autoDetect ? JPH::Vec3(bodyA.GetPosition()) : JPH::Vec3(toJolt(def.anchorA));
+    JPH::Vec3 wb = autoDetect ? JPH::Vec3(bodyB->GetPosition()) : JPH::Vec3(toJolt(def.anchorB));
+    if (autoDetect && idB == PhysicsBody::kInvalidId) wb = wa;   // world side: show at A
+    rec.localAnchorA = toLocalPoint(bodyA, wa);
+    rec.localAnchorB = toLocalPoint(*bodyB, wb);
+    rec.localAxisA   = toLocalDir(bodyA, JPH::Vec3(def.axis.x, def.axis.y, def.axis.z).Normalized());
+    impl_->joints.push_back(rec);
+
+    return PhysicsJoint(this, rec.id, alive_);
+}
+
+void PhysicsWorld::removeJoint(const PhysicsJoint& joint) {
+    removeJointById(joint.getId());
+}
+
+void PhysicsWorld::removeJointById(uint64_t id) {
+    if (!impl_->initialized) return;
+    TC_LOCK_GUARD(impl_->simMutex);
+    auto& v = impl_->joints;
+    for (auto it = v.begin(); it != v.end(); ++it) {
+        if (it->id == id) {
+            impl_->physicsSystem.RemoveConstraint(it->constraint.GetPtr());
+            v.erase(it);
+            return;
+        }
+    }
+}
+
+std::vector<PhysicsJoint> PhysicsWorld::getJoints() const {
+    std::vector<PhysicsJoint> out;
+    if (!impl_->initialized) return out;
+    TC_LOCK_GUARD(impl_->simMutex);
+    out.reserve(impl_->joints.size());
+    for (const auto& r : impl_->joints)
+        out.emplace_back(const_cast<PhysicsWorld*>(this), r.id, alive_);
+    return out;
+}
+
+std::vector<PhysicsJoint> PhysicsWorld::getJointsForBody(uint32_t bodyId) const {
+    std::vector<PhysicsJoint> out;
+    if (!impl_->initialized || bodyId == PhysicsBody::kInvalidId) return out;
+    TC_LOCK_GUARD(impl_->simMutex);
+    for (const auto& r : impl_->joints)
+        if (r.bodyA == bodyId || r.bodyB == bodyId)
+            out.emplace_back(const_cast<PhysicsWorld*>(this), r.id, alive_);
+    return out;
+}
+
+bool PhysicsWorld::hasJoint(uint64_t id) const {
+    if (!impl_->initialized) return false;
+    TC_LOCK_GUARD(impl_->simMutex);
+    return impl_->find(id) != nullptr;
+}
+
+JointType PhysicsWorld::getJointType(uint64_t id) const {
+    if (!impl_->initialized) return JointType::Point;
+    TC_LOCK_GUARD(impl_->simMutex);
+    auto* r = impl_->find(id);
+    return r ? r->type : JointType::Point;
+}
+
+uint32_t PhysicsWorld::getJointBodyA(uint64_t id) const {
+    if (!impl_->initialized) return PhysicsBody::kInvalidId;
+    TC_LOCK_GUARD(impl_->simMutex);
+    auto* r = impl_->find(id);
+    return r ? r->bodyA : PhysicsBody::kInvalidId;
+}
+
+uint32_t PhysicsWorld::getJointBodyB(uint64_t id) const {
+    if (!impl_->initialized) return PhysicsBody::kInvalidId;
+    TC_LOCK_GUARD(impl_->simMutex);
+    auto* r = impl_->find(id);
+    return r ? r->bodyB : PhysicsBody::kInvalidId;
+}
+
+Vec3 PhysicsWorld::getJointAnchorA(uint64_t id) const {
+    if (!impl_->initialized) return Vec3();
+    TC_LOCK_GUARD(impl_->simMutex);
+    auto* r = impl_->find(id);
+    return r ? toTc(impl_->anchorWorld(r->bodyA, r->localAnchorA)) : Vec3();
+}
+
+Vec3 PhysicsWorld::getJointAnchorB(uint64_t id) const {
+    if (!impl_->initialized) return Vec3();
+    TC_LOCK_GUARD(impl_->simMutex);
+    auto* r = impl_->find(id);
+    return r ? toTc(impl_->anchorWorld(r->bodyB, r->localAnchorB)) : Vec3();
+}
+
+Vec3 PhysicsWorld::getJointAxis(uint64_t id) const {
+    if (!impl_->initialized) return Vec3(0, 1, 0);
+    TC_LOCK_GUARD(impl_->simMutex);
+    auto* r = impl_->find(id);
+    if (!r) return Vec3(0, 1, 0);
+    JPH::Quat rot = impl_->bodies().GetRotation(JPH::BodyID(r->bodyA));
+    return toTc(rot * r->localAxisA);
 }
 
 Vec3 PhysicsWorld::getBodyPosition(uint32_t id) const {

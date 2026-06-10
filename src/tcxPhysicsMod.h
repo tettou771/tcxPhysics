@@ -133,6 +133,50 @@ public:
     RigidBody& setTrigger(bool on = true) { trigger_ = on; if (body_.isValid()) body_.setSensor(on); return *this; }
     bool isTrigger() const { return trigger_; }
 
+    // --- joints --------------------------------------------------------------
+    // Constrain this body to another node's RigidBody:
+    //
+    //   door->getMod<RigidBody>()->jointTo(frame, Joint::hinge(edge, {0,1,0}));
+    //
+    // The world owns the joint; the returned PhysicsJoint is a lightweight
+    // handle. Destroying either node removes the joint automatically.
+    //
+    // NOTE on timing: both bodies must exist. A RigidBody added inside a Node
+    // subclass's setup() is only created when that setup runs (the node's first
+    // frame in the tree) — so wire joints AFTER both nodes are set up (e.g. the
+    // frame after spawning), or add the mods directly from app code
+    // (node->addMod<RigidBody>(...) creates the body immediately).
+    PhysicsJoint jointTo(tc::Node* other, const Joint& def) {
+        if (!body_.isValid()) {
+            tc::logWarning() << "tcxPhysics: jointTo before this body exists (wire joints after setup).";
+            return PhysicsJoint();
+        }
+        RigidBody* otherRb = other ? other->getMod<RigidBody>() : nullptr;
+        if (!otherRb || !otherRb->body_.isValid()) {
+            tc::logWarning() << "tcxPhysics: jointTo target has no live RigidBody.";
+            return PhysicsJoint();
+        }
+        return world_->addJoint(body_, otherRb->body_, def);
+    }
+    PhysicsJoint jointTo(const std::shared_ptr<tc::Node>& other, const Joint& def) {
+        return jointTo(other.get(), def);
+    }
+
+    // Constrain this body to the WORLD (hang from the air, pin to a wall...).
+    PhysicsJoint jointToWorld(const Joint& def) {
+        if (!body_.isValid()) {
+            tc::logWarning() << "tcxPhysics: jointToWorld before this body exists.";
+            return PhysicsJoint();
+        }
+        return world_->addJoint(body_, def);
+    }
+
+    // Every live joint touching this body (queries the world; nothing cached).
+    std::vector<PhysicsJoint> getJoints() const {
+        if (!body_.isValid()) return {};
+        return world_->getJointsForBody(body_.getId());
+    }
+
     // Built-in wireframe debug draw of the collision shape.
     RigidBody& setWireframe(bool on, const tc::Color& color = tc::Color(0.3f, 1.0f, 0.5f)) {
         wireframe_ = on; wireColor_ = color; return *this;
