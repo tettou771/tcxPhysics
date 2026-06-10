@@ -2,7 +2,6 @@
 
 #include <TrussC.h>
 #include <tcxPhysics.h>
-#include <vector>
 
 using namespace std;
 using namespace tc;

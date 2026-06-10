@@ -26,6 +26,7 @@
 #include "tcxPhysicsWorld.h"
 #include "tcxPhysicsBody.h"
 #include <TrussC.h>   // tc::Mod, tc::Node, createBox/Sphere/Capsule/Cylinder, Material
+#include <unordered_map>
 
 namespace tcx {
 
@@ -43,15 +44,23 @@ struct ColliderShape {
     static ColliderShape cylinder(float r, float h) { ColliderShape c; c.kind = Cylinder; c.radius = r; c.height = h; return c; }
 };
 
-// Dynamic = simulated (physics drives the node). Static = a fixed obstacle placed
-// at the node's transform when attached.
-enum class BodyType { Dynamic, Static };
+// Dynamic   = simulated (physics drives the node).
+// Static    = a fixed obstacle placed at the node's transform when attached.
+// Kinematic = YOU drive the node (in setup/update); the body follows and pushes
+//             dynamics with the right momentum, but ignores forces/gravity itself.
+//             Great for moving platforms, paddles, doors.
+enum class BodyType { Dynamic, Static, Kinematic };
 
-// Process-wide default world for the terse `addMod<RigidBody>(shape)` form. You
-// still setup() and step it yourself (defaultWorld().update(dt) each frame).
+// Process-wide default world, so `addMod<RigidBody>(shape)` needs no world passed.
+// Point it at your own instance with setDefaultWorld(); otherwise the first access
+// lazily creates a built-in one. You still setup() and step it (the app usually
+// does defaultWorld().setup() once and defaultWorld().update(dt) each frame).
+inline PhysicsWorld*& currentDefaultWorld_() { static PhysicsWorld* p = nullptr; return p; }
+inline void setDefaultWorld(PhysicsWorld& world) { currentDefaultWorld_() = &world; }
 inline PhysicsWorld& defaultWorld() {
-    static PhysicsWorld w;
-    return w;
+    PhysicsWorld*& p = currentDefaultWorld_();
+    if (!p) { static PhysicsWorld builtin; p = &builtin; }
+    return *p;
 }
 
 // Build a render mesh matching a collider shape (used by the wireframe debug draw
@@ -64,6 +73,35 @@ inline tc::Mesh buildShapeMesh(const ColliderShape& s) {
         case ColliderShape::Cylinder: return tc::createCylinder(s.radius, s.height, 24);
     }
     return tc::Mesh();
+}
+
+class RigidBody;  // fwd
+
+// Argument for RigidBody::onCollisionBegan / onCollisionEnded, described from the
+// receiving body's point of view. `other` is the body it touched, or null if that
+// was a non-RigidBody collider (the ground plane, a raw addBox/addMesh body, ...).
+struct Collision {
+    RigidBody* other = nullptr;
+    tc::Node*  otherNode = nullptr;   // other ? other->getOwner() : nullptr
+    tc::Vec3   point;                 // world-space (zero on Ended)
+    tc::Vec3   normal;                // world-space (zero on Ended)
+    float      speed = 0.0f;          // approach speed at impact (zero on Ended)
+};
+
+namespace detail {
+    // One router per world: maps Jolt body id -> the RigidBody that owns it, plus
+    // the listeners on that world's contactBegan/Ended. The first RigidBody on a
+    // world installs the listeners; everyone registers their body id here.
+    struct ContactRouter {
+        std::unordered_map<uint32_t, RigidBody*> bodies;
+        tc::EventListener beganL, persistedL, endedL;
+    };
+    inline std::unordered_map<PhysicsWorld*, ContactRouter>& contactRouters() {
+        static std::unordered_map<PhysicsWorld*, ContactRouter> r;
+        return r;
+    }
+    // phase: 0 = began, 1 = stay, 2 = ended.
+    void routeContact(PhysicsWorld* w, ContactEventArgs& c, int phase);  // after RigidBody
 }
 
 // =============================================================================
@@ -90,10 +128,29 @@ public:
     RigidBody& setFriction(float f)    { friction_ = f;    if (body_.isValid()) body_.setFriction(f);    return *this; }
     RigidBody& setRestitution(float r) { restitution_ = r; if (body_.isValid()) body_.setRestitution(r); return *this; }
 
+    // Make this body a trigger (sensor): it detects overlaps and fires onTrigger*,
+    // but never blocks motion. Set it before or after attach. (chainable)
+    RigidBody& setTrigger(bool on = true) { trigger_ = on; if (body_.isValid()) body_.setSensor(on); return *this; }
+    bool isTrigger() const { return trigger_; }
+
     // Built-in wireframe debug draw of the collision shape.
     RigidBody& setWireframe(bool on, const tc::Color& color = tc::Color(0.3f, 1.0f, 0.5f)) {
         wireframe_ = on; wireColor_ = color; return *this;
     }
+
+    // Collision events (listen via EventListener; fired on the main thread).
+    //   listener = rb->onCollisionBegan.listen([](Collision& c){ ... });
+    tc::Event<Collision> onCollisionBegan;   // started touching (Enter)
+    tc::Event<Collision> onCollisionStay;    // still touching, every step (Stay)
+    tc::Event<Collision> onCollisionEnded;   // stopped touching (Exit)
+
+    // Trigger events — fired instead of the collision ones whenever EITHER side is
+    // a trigger (a sensor: it detects overlaps but never blocks motion). Make this
+    // body a trigger with setTrigger(true). `point`/`normal`/`speed` come from the
+    // overlap manifold (zero on Exit), `other`/`otherNode` is who entered.
+    tc::Event<Collision> onTriggerBegan;     // started overlapping (Enter)
+    tc::Event<Collision> onTriggerStay;      // still overlapping, every step (Stay)
+    tc::Event<Collision> onTriggerEnded;     // stopped overlapping (Exit)
 
 protected:
     void setup() override {
@@ -101,21 +158,39 @@ protected:
         worldAlive_ = world_->aliveToken();
         // Physics is WORLD-space — create the body at the node's global transform.
         tc::Vec3 wpos = n->getGlobalPos();
-        bool dyn = (type_ == BodyType::Dynamic);
+        // Kinematic bodies must live in the moving layer (so they collide with and
+        // push dynamics), so create them movable, then switch the motion type.
+        bool movable = (type_ != BodyType::Static);
         switch (shape_.kind) {
-            case ColliderShape::Box:      body_ = world_->addBox(wpos, shape_.size, dyn, density_); break;
-            case ColliderShape::Sphere:   body_ = world_->addSphere(wpos, shape_.radius, dyn, density_); break;
-            case ColliderShape::Capsule:  body_ = world_->addCapsule(wpos, shape_.radius, shape_.height, dyn, density_); break;
-            case ColliderShape::Cylinder: body_ = world_->addCylinder(wpos, shape_.radius, shape_.height, dyn, density_); break;
+            case ColliderShape::Box:      body_ = world_->addBox(wpos, shape_.size, movable, density_); break;
+            case ColliderShape::Sphere:   body_ = world_->addSphere(wpos, shape_.radius, movable, density_); break;
+            case ColliderShape::Capsule:  body_ = world_->addCapsule(wpos, shape_.radius, shape_.height, movable, density_); break;
+            case ColliderShape::Cylinder: body_ = world_->addCylinder(wpos, shape_.radius, shape_.height, movable, density_); break;
         }
         if (body_.isValid()) {
             body_.setRotation(globalQuat(n));
+            if (type_ == BodyType::Kinematic) body_.setMotionType(MotionType::Kinematic);
+            if (trigger_)             body_.setSensor(true);
             if (friction_ >= 0.0f)    body_.setFriction(friction_);
             if (restitution_ >= 0.0f) body_.setRestitution(restitution_);
+
+            // Register for collision routing. The first body on this world hooks
+            // the world's contact events.
+            auto& router = detail::contactRouters()[world_];
+            if (!router.beganL) {
+                router.beganL = world_->contactBegan.listen(
+                    [w = world_](ContactEventArgs& c) { detail::routeContact(w, c, 0); });
+                router.persistedL = world_->contactPersisted.listen(
+                    [w = world_](ContactEventArgs& c) { detail::routeContact(w, c, 1); });
+                router.endedL = world_->contactEnded.listen(
+                    [w = world_](ContactEventArgs& c) { detail::routeContact(w, c, 2); });
+            }
+            router.bodies[body_.getId()] = this;
         }
     }
 
-    // Dynamic: physics drives the node. This runs in the Mod dispatch, so a user's
+    // Dynamic: physics drives the node — sync BEFORE Node::update() so user code
+    // sees the fresh transform. This runs in the Mod dispatch, so a user's
     // Node::update()/draw() override (even without calling super) can never skip it.
     void earlyUpdate() override {
         if (type_ != BodyType::Dynamic || !body_.isValid()) return;
@@ -129,6 +204,16 @@ protected:
         n->setQuaternion(parentGlobalQuat(n).conjugate() * body_.getRotation());
     }
 
+    // Kinematic: the node drives the body — sync AFTER Node::update() so we pick up
+    // wherever the user just moved the node this frame. moveKinematic derives the
+    // velocity from the delta so the body shoves the dynamics it meets.
+    void update() override {
+        if (type_ != BodyType::Kinematic || !body_.isValid()) return;
+        tc::Node* n = getOwner();
+        if (n->isDead()) return;
+        body_.moveKinematic(n->getGlobalPos(), globalQuat(n), (float)tc::getDeltaTime());
+    }
+
     void draw() override {
         if (!wireframe_ || !body_.isValid()) return;
         if (wireMesh_.getNumVertices() == 0) wireMesh_ = buildShapeMesh(shape_);
@@ -137,6 +222,11 @@ protected:
     }
 
     void onDestroy() override {
+        // Unregister from contact routing (registry holds a raw this pointer).
+        if (body_.isValid()) {
+            auto it = detail::contactRouters().find(world_);
+            if (it != detail::contactRouters().end()) it->second.bodies.erase(body_.getId());
+        }
         // Only touch the world if it's still alive — at shutdown it may be
         // destroyed before its bodies' nodes (it frees all bodies itself).
         if (!worldAlive_.expired() && world_ && body_.isValid()) world_->removeBody(body_);
@@ -145,6 +235,32 @@ protected:
     bool isExclusive() const override { return true; }
 
 private:
+    friend void detail::routeContact(PhysicsWorld* w, ContactEventArgs& c, int phase);
+
+    // Build a Collision (from this body's view) and fire the matching event. When
+    // the contact involves a sensor, the trigger events fire instead.
+    void fireContact(RigidBody* other, const ContactEventArgs& c, int phase, bool trigger) {
+        Collision col;
+        col.other     = other;
+        col.otherNode = other ? other->getOwner() : nullptr;
+        col.point     = c.point;
+        col.normal    = c.normal;
+        col.speed     = c.speed;
+        if (trigger) {
+            switch (phase) {
+                case 0:  onTriggerBegan.notify(col); break;
+                case 1:  onTriggerStay.notify(col);  break;
+                default: onTriggerEnded.notify(col); break;
+            }
+        } else {
+            switch (phase) {
+                case 0:  onCollisionBegan.notify(col); break;
+                case 1:  onCollisionStay.notify(col);  break;
+                default: onCollisionEnded.notify(col); break;
+            }
+        }
+    }
+
     // Core has no getGlobalQuaternion(), so walk the parent chain.
     static tc::Quaternion parentGlobalQuat(tc::Node* n) {
         tc::Quaternion q = tc::Quaternion::identity();
@@ -161,12 +277,32 @@ private:
     float density_ = 1000.0f;
     float friction_ = -1.0f;
     float restitution_ = -1.0f;
+    bool trigger_ = false;
     PhysicsBody body_;
     std::weak_ptr<int> worldAlive_;
     bool wireframe_ = false;
     tc::Color wireColor_{0.3f, 1.0f, 0.5f};
     tc::Mesh wireMesh_;
 };
+
+namespace detail {
+// Fan a world contact out to the RigidBody(s) involved (main thread). Each side
+// hears about the OTHER body; a side that isn't a RigidBody resolves to null.
+inline void routeContact(PhysicsWorld* w, ContactEventArgs& c, int phase) {
+    auto it = contactRouters().find(w);
+    if (it == contactRouters().end()) return;
+    auto& bodies = it->second.bodies;
+    auto fa = bodies.find(c.a.getId());
+    auto fb = bodies.find(c.b.getId());
+    RigidBody* ra = (fa != bodies.end()) ? fa->second : nullptr;
+    RigidBody* rb = (fb != bodies.end()) ? fb->second : nullptr;
+    // If either side is a trigger, the whole contact is a trigger overlap (Jolt
+    // produced no collision response for it), so both sides get onTrigger*.
+    bool trigger = (ra && ra->isTrigger()) || (rb && rb->isTrigger());
+    if (ra) ra->fireContact(rb, c, phase, trigger);
+    if (rb) rb->fireContact(ra, c, phase, trigger);
+}
+} // namespace detail
 
 // =============================================================================
 // ColliderRenderer : draw the sibling RigidBody's shape as solid faces.

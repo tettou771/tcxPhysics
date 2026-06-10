@@ -2,8 +2,6 @@
 
 #include <TrussC.h>
 #include <tcxPhysics.h>
-#include <vector>
-#include <unordered_map>
 
 using namespace std;
 using namespace tc;

@@ -92,11 +92,14 @@ cube count and FPS readout.
 | `addConvexHull(pos, mesh, dynamic = true, density = 1000)` | Convex hull of a mesh's **vertices** (triangles/concavity ignored). For arbitrary *convex* dynamic bodies. |
 | `addMesh(pos, mesh, dynamic = false)` | Triangle-mesh collider — **any geometry incl. concave**, but **static only** (no mass). For terrain / level scenery. |
 | `addGroundPlane(y = 0, size = 100000)` | A large static floor centered on `(0, y, 0)`. |
+| `raycast(origin, direction, maxDistance = 1e6)` | Cast a ray, return the closest `RaycastHit` — see [Raycasting](#raycasting). |
 | `removeBody(body)` | Remove one body. |
 | `clearDynamicBodies()` | Remove every dynamic body, keep static scenery. |
 | `getNumBodies()` | Total body count. |
+| `setBodyMotionType(id, MotionType)` / `moveBodyKinematic(id, pos, rot, dt)` | Switch a body's motion type / drive a kinematic one — see [Kinematic bodies](#kinematic-bodies). |
+| `setBodyIsSensor(id, bool)` / `isBodySensor(id)` | Make a body a trigger (sensor) — see [Sensors (triggers)](#sensors-triggers). |
 | `updateAsyncStart(hz = 120)` / `updateAsyncStop()` / `isAsync()` | Step on a fixed-timestep clock — see [Async stepping](#async-stepping). |
-| `contactBegan` / `contactEnded` | `tc::Event<ContactEventArgs>` — see [Contact events](#contact-events). |
+| `contactBegan` / `contactPersisted` / `contactEnded` | `tc::Event<ContactEventArgs>` — see [Contact events](#contact-events). |
 | `nativeSystem()` / `nativeBodyInterface()` | Raw Jolt pointers (`void*`) — see [Advanced: raw Jolt](#advanced-raw-jolt-escape-hatch). |
 
 `dynamic = false` makes a body static (floor, walls, scenery) — it never moves
@@ -122,6 +125,9 @@ lives in the `PhysicsWorld`. The setters return `*this`, so they chain.
 | `setLinearVelocity(v)` / `getLinearVelocity()` | Direct linear velocity. |
 | `setAngularVelocity(v)` / `getAngularVelocity()` | Direct angular velocity. |
 | `setPosition(p)` / `setRotation(q)` | Teleport (snaps transform, no collision sweep — for spawn/reset). |
+| `setMotionType(MotionType)` | Switch between `Static` / `Kinematic` / `Dynamic`. |
+| `moveKinematic(pos, rot, dt)` | Drive a kinematic body so it pushes dynamics with real momentum (call each frame). |
+| `setSensor(bool)` / `isSensor()` | Make this body a trigger — detects overlaps, blocks nothing. |
 | `setFriction(f)` / `getFriction()` | `0` = ice, `~1` = grippy. |
 | `setRestitution(r)` / `getRestitution()` | `0` = dead, `1` = full bounce. |
 | `activate()` / `isActive()` | Wake / query a sleeping body. |
@@ -172,8 +178,64 @@ void setup() override {
 }
 ```
 
-`contactEnded` fires when a pair stops touching (its `point`/`normal`/`speed` are
-zero — only the body pair is meaningful). Example: `example-collision/`.
+`contactPersisted` fires every step while a pair keeps touching (can be a lot of
+events), and `contactEnded` fires when a pair stops touching (its
+`point`/`normal`/`speed` are zero — only the body pair is meaningful). Example:
+`example-collision/`.
+
+---
+
+## Raycasting
+
+Cast a ray into the world and get the closest body it hits:
+
+```cpp
+RaycastHit hit = world.raycast(origin, direction, /*maxDistance*/ 100.0f);
+if (hit) {                 // contextually convertible to bool
+    hit.body;              // the PhysicsBody struck (a handle)
+    hit.point;             // world-space impact point
+    hit.normal;            // outward surface normal there
+    hit.distance;          // distance along the ray
+}
+```
+
+`direction` need not be normalized. Static, kinematic and dynamic bodies are all
+hit; sensors are skipped. For **mouse picking**, build the ray from the camera —
+`origin = cam.getPosition()`, `direction = screenToWorld(getMousePos(), 0) - origin`
+— and cast it. Example: `example-raycast/`.
+
+---
+
+## Sensors (triggers)
+
+A **sensor** detects overlaps but produces no collision response — bodies pass
+straight through it. It still reports its overlaps through the normal contact
+events, so it's perfect for trigger volumes (goals, pickups, zones):
+
+```cpp
+PhysicsBody zone = world.addBox(Vec3(0, 1, 0), Vec3(2), /*dynamic*/ false);
+zone.setSensor(true);   // now things fall through it but it still reports contacts
+```
+
+A static sensor detects the dynamic bodies that move through it. Example:
+`example-trigger/`.
+
+---
+
+## Kinematic bodies
+
+A **kinematic** body is one *you* move (it ignores gravity and impacts) that still
+pushes the dynamic bodies it meets — ideal for moving platforms, paddles and doors:
+
+```cpp
+PhysicsBody platform = world.addBox(Vec3(0, 1, 0), Vec3(2, 0.3f, 2));
+platform.setMotionType(MotionType::Kinematic);
+// each frame, drive it toward a new transform; Jolt derives the velocity so it
+// shoves dynamics with the right momentum (unlike setPosition, which teleports):
+platform.moveKinematic(targetPos, targetRot, getDeltaTime());
+```
+
+Example: `example-kinematic/`.
 
 ---
 
@@ -247,6 +309,9 @@ hanging chain using Jolt constraints, with the `local.cmake` shown above.
 | `example-forces/` | `applyImpulse` / `applyForce` / `addVelocity` (click to explode, hold to levitate, V to jump). |
 | `example-bounce/` | `setRestitution` / `setFriction` — a row of spheres, dead → bouncy. |
 | `example-collision/` | `contactBegan` events — flash + spark + count on impact. |
+| `example-raycast/` | `raycast` — mouse-pick the body under the cursor (highlight, hit point + normal), SPACE to shoot it. |
+| `example-trigger/` | Sensor volume — cubes fall through a trigger box that counts occupants and glows. |
+| `example-kinematic/` | Kinematic movers — a sliding slab and a spinning paddle push the dynamic cubes around. |
 | `example-fixedTimestep/` | `updateAsyncStart` — a fixed 240 Hz step keeps a tall stack solid; per-frame (capped to 30 fps) wobbles and topples. |
 | `example-joltNativeAccess/` | The raw-Jolt escape hatch — a constraint-based chain. |
 

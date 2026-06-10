@@ -92,6 +92,28 @@ const PhysicsBody& PhysicsBody::setRotation(const tc::Quaternion& q) const {
     return *this;
 }
 
+// --- motion type ------------------------------------------------------------
+const PhysicsBody& PhysicsBody::setMotionType(MotionType type) const {
+    if (isValid()) world_->setBodyMotionType(id_, type);
+    return *this;
+}
+
+const PhysicsBody& PhysicsBody::moveKinematic(const tc::Vec3& pos, const tc::Quaternion& rot, float dt) const {
+    if (isValid()) world_->moveBodyKinematic(id_, pos, rot, dt);
+    return *this;
+}
+
+// --- sensor (trigger) -------------------------------------------------------
+const PhysicsBody& PhysicsBody::setSensor(bool sensor) const {
+    if (isValid()) world_->setBodyIsSensor(id_, sensor);
+    return *this;
+}
+
+bool PhysicsBody::isSensor() const {
+    if (!isValid()) return false;
+    return world_->isBodySensor(id_);
+}
+
 // --- material ---------------------------------------------------------------
 const PhysicsBody& PhysicsBody::setFriction(float friction) const {
     if (isValid()) world_->setBodyFriction(id_, friction);

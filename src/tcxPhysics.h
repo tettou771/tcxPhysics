@@ -22,3 +22,4 @@
 
 #include "tcxPhysicsBody.h"
 #include "tcxPhysicsWorld.h"
+#include "tcxPhysicsMod.h"   // RigidBody / ColliderRenderer Node Mods (experimental)

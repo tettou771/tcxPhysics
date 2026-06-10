@@ -18,7 +18,11 @@
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/Body.h>
+#include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 
 // Compile the opt-in escape-hatch header here too, so it can never silently rot
 // (it's inline-only — no ODR/runtime cost). Jolt is already on the path in this TU.
@@ -165,23 +169,24 @@ constexpr JPH::uint cMaxPhysicsBarriers = 8;
 // by the world). The records are replayed as events on the main thread later,
 // so user handlers never run on a physics worker thread.
 // ---------------------------------------------------------------------------
+// Contact phase passed through the sink: 0 = began, 1 = persisted (still
+// touching), 2 = ended. Matches PhysicsWorld's three contact events.
 class ContactListenerImpl final : public JPH::ContactListener {
 public:
-    // (bodyA, bodyB, worldPoint, worldNormal, approachSpeed, began)
-    std::function<void(uint32_t, uint32_t, const Vec3&, const Vec3&, float, bool)> sink;
+    // (bodyA, bodyB, worldPoint, worldNormal, approachSpeed, phase)
+    std::function<void(uint32_t, uint32_t, const Vec3&, const Vec3&, float, int)> sink;
 
     void OnContactAdded(const JPH::Body& b1, const JPH::Body& b2,
                         const JPH::ContactManifold& manifold,
                         JPH::ContactSettings&) override {
-        if (!sink) return;
-        Vec3 normal = toTc(manifold.mWorldSpaceNormal);
-        Vec3 point  = toTc(manifold.GetWorldSpaceContactPointOn1(0));
-        // Approach speed along the contact normal — a cheap, useful proxy for
-        // "how hard" the hit was (relative impulse isn't known pre-solve).
-        float speed = std::abs((b1.GetLinearVelocity() - b2.GetLinearVelocity())
-                                   .Dot(manifold.mWorldSpaceNormal));
-        sink(b1.GetID().GetIndexAndSequenceNumber(),
-             b2.GetID().GetIndexAndSequenceNumber(), point, normal, speed, true);
+        fromManifold(b1, b2, manifold, 0);
+    }
+
+    // Fires every step while a pair keeps touching — can be a lot of events.
+    void OnContactPersisted(const JPH::Body& b1, const JPH::Body& b2,
+                            const JPH::ContactManifold& manifold,
+                            JPH::ContactSettings&) override {
+        fromManifold(b1, b2, manifold, 1);
     }
 
     void OnContactRemoved(const JPH::SubShapeIDPair& pair) override {
@@ -189,7 +194,21 @@ public:
         // No manifold on removal — point/normal/speed are unknown.
         sink(pair.GetBody1ID().GetIndexAndSequenceNumber(),
              pair.GetBody2ID().GetIndexAndSequenceNumber(),
-             Vec3(), Vec3(), 0.0f, false);
+             Vec3(), Vec3(), 0.0f, 2);
+    }
+
+private:
+    void fromManifold(const JPH::Body& b1, const JPH::Body& b2,
+                      const JPH::ContactManifold& manifold, int phase) {
+        if (!sink) return;
+        Vec3 normal = toTc(manifold.mWorldSpaceNormal);
+        Vec3 point  = toTc(manifold.GetWorldSpaceContactPointOn1(0));
+        // Approach speed along the contact normal — a cheap, useful proxy for
+        // "how hard" the contact is.
+        float speed = std::abs((b1.GetLinearVelocity() - b2.GetLinearVelocity())
+                                   .Dot(manifold.mWorldSpaceNormal));
+        sink(b1.GetID().GetIndexAndSequenceNumber(),
+             b2.GetID().GetIndexAndSequenceNumber(), point, normal, speed, phase);
     }
 };
 
@@ -231,7 +250,7 @@ struct PhysicsWorld::Impl {
         Vec3  point;
         Vec3  normal;
         float speed = 0.0f;
-        bool  began = false;
+        int   phase = 0;   // 0 = began, 1 = persisted, 2 = ended
     };
     vector<PendingContact> pending;
 
@@ -305,9 +324,9 @@ void PhysicsWorld::setup(int maxBodies, int maxBodyPairs, int maxContactConstrai
     // they are replayed as events on the main thread in dispatchContacts().
     impl_->contactListener.sink =
         [imp = impl_.get()](uint32_t a, uint32_t b, const Vec3& pt,
-                            const Vec3& n, float s, bool began) {
+                            const Vec3& n, float s, int phase) {
             TC_LOCK_GUARD(imp->contactsMutex);
-            imp->pending.push_back({a, b, pt, n, s, began});
+            imp->pending.push_back({a, b, pt, n, s, phase});
         };
     impl_->physicsSystem.SetContactListener(&impl_->contactListener);
 
@@ -448,8 +467,11 @@ void PhysicsWorld::dispatchContacts() {
         args.point  = pc.point;
         args.normal = pc.normal;
         args.speed  = pc.speed;
-        if (pc.began) contactBegan.notify(args);
-        else          contactEnded.notify(args);
+        switch (pc.phase) {
+            case 0:  contactBegan.notify(args);     break;
+            case 1:  contactPersisted.notify(args); break;
+            default: contactEnded.notify(args);     break;
+        }
     }
 }
 
@@ -655,6 +677,39 @@ PhysicsBody PhysicsWorld::addGroundPlane(float y, float size) {
     return ground;
 }
 
+RaycastHit PhysicsWorld::raycast(const Vec3& origin, const Vec3& direction, float maxDistance) const {
+    RaycastHit out;
+    if (!impl_->initialized) return out;
+
+    float len = direction.length();
+    // Reject degenerate / non-finite input (e.g. a ray built from an uninitialized
+    // camera matrix one frame too early) — a NaN ray crashes Jolt's narrow phase.
+    if (!std::isfinite(len) || len < 1e-8f || maxDistance <= 0.0f) return out;
+    if (!std::isfinite(origin.x) || !std::isfinite(origin.y) || !std::isfinite(origin.z)) return out;
+    Vec3 dir = direction * (1.0f / len);          // unit direction
+    JPH::Vec3 disp(dir.x * maxDistance, dir.y * maxDistance, dir.z * maxDistance);
+    JPH::RRayCast ray{ toJolt(origin), disp };
+
+    JPH::RayCastResult result;
+    TC_LOCK_GUARD(impl_->simMutex);
+    // Closest hit against all bodies with default filters (sensors are skipped by
+    // the narrow phase). mFraction is along the ray's displacement vector.
+    if (!impl_->physicsSystem.GetNarrowPhaseQuery().CastRay(ray, result)) return out;
+
+    out.hit      = true;
+    out.distance = result.mFraction * maxDistance;
+    out.point    = origin + dir * out.distance;
+    out.body     = PhysicsBody(const_cast<PhysicsWorld*>(this),
+                               result.mBodyID.GetIndexAndSequenceNumber());
+    // Surface normal at the hit point needs the live body.
+    JPH::BodyLockRead bodyLock(impl_->physicsSystem.GetBodyLockInterface(), result.mBodyID);
+    if (bodyLock.Succeeded()) {
+        out.normal = toTc(bodyLock.GetBody().GetWorldSpaceSurfaceNormal(
+            result.mSubShapeID2, toJolt(out.point)));
+    }
+    return out;
+}
+
 void PhysicsWorld::removeBody(const PhysicsBody& body) {
     if (!impl_->initialized || !body.isValid()) return;
     TC_LOCK_GUARD(impl_->simMutex);
@@ -825,6 +880,59 @@ void PhysicsWorld::setBodyRotation(uint32_t id, const Quaternion& q) {
     if (!impl_->initialized || id == PhysicsBody::kInvalidId) return;
     TC_LOCK_GUARD(impl_->simMutex);
     impl_->bodies().SetRotation(JPH::BodyID(id), toJolt(q), JPH::EActivation::Activate);
+}
+
+void PhysicsWorld::setBodyMotionType(uint32_t id, MotionType type) {
+    if (!impl_->initialized || id == PhysicsBody::kInvalidId) return;
+    TC_LOCK_GUARD(impl_->simMutex);
+    JPH::BodyID bid(id);
+    JPH::EMotionType mt = JPH::EMotionType::Dynamic;
+    switch (type) {
+        case MotionType::Static:    mt = JPH::EMotionType::Static;    break;
+        case MotionType::Kinematic: mt = JPH::EMotionType::Kinematic; break;
+        case MotionType::Dynamic:   mt = JPH::EMotionType::Dynamic;   break;
+    }
+    // Static bodies sit still; kinematic/dynamic want to be awake to act.
+    JPH::EActivation act = (type == MotionType::Static)
+        ? JPH::EActivation::DontActivate : JPH::EActivation::Activate;
+    impl_->bodies().SetMotionType(bid, mt, act);
+
+    // Keep the dynamicBodies tracking honest: only true Dynamic bodies belong in
+    // it (clearDynamicBodies() must not wipe kinematic platforms / static scenery).
+    auto& v = impl_->dynamicBodies;
+    bool tracked = std::find(v.begin(), v.end(), bid) != v.end();
+    if (type == MotionType::Dynamic && !tracked) v.push_back(bid);
+    if (type != MotionType::Dynamic && tracked)
+        v.erase(std::remove(v.begin(), v.end(), bid), v.end());
+}
+
+void PhysicsWorld::moveBodyKinematic(uint32_t id, const Vec3& pos, const Quaternion& rot, float dt) {
+    if (!impl_->initialized || id == PhysicsBody::kInvalidId) return;
+    if (dt <= 0.0f) return;
+    TC_LOCK_GUARD(impl_->simMutex);
+    JPH::BodyID bid(id);
+    if (impl_->bodies().GetMotionType(bid) != JPH::EMotionType::Kinematic) {
+        // Not kinematic — fall back to a teleport so the call still does the
+        // obvious thing instead of silently nothing.
+        impl_->bodies().SetPositionAndRotation(bid, toJolt(pos), toJolt(rot),
+                                               JPH::EActivation::Activate);
+        return;
+    }
+    impl_->bodies().MoveKinematic(bid, toJolt(pos), toJolt(rot), dt);
+}
+
+void PhysicsWorld::setBodyIsSensor(uint32_t id, bool sensor) {
+    if (!impl_->initialized || id == PhysicsBody::kInvalidId) return;
+    TC_LOCK_GUARD(impl_->simMutex);
+    JPH::BodyLockWrite bodyLock(impl_->physicsSystem.GetBodyLockInterface(), JPH::BodyID(id));
+    if (bodyLock.Succeeded()) bodyLock.GetBody().SetIsSensor(sensor);
+}
+
+bool PhysicsWorld::isBodySensor(uint32_t id) const {
+    if (!impl_->initialized || id == PhysicsBody::kInvalidId) return false;
+    TC_LOCK_GUARD(impl_->simMutex);
+    JPH::BodyLockRead bodyLock(impl_->physicsSystem.GetBodyLockInterface(), JPH::BodyID(id));
+    return bodyLock.Succeeded() && bodyLock.GetBody().IsSensor();
 }
 
 void PhysicsWorld::setBodyFriction(uint32_t id, float friction) {

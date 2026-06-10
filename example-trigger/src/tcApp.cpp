@@ -1,5 +1,5 @@
 #include "tcApp.h"
-#include "Prop.h"
+#include "Faller.h"
 
 static void drawFloorGrid(float halfExtent, float step) {
     setColor(0.25f, 0.27f, 0.30f);
@@ -10,12 +10,12 @@ static void drawFloorGrid(float halfExtent, float step) {
 }
 
 void tcApp::setup() {
-    setWindowTitle("tcxPhysics - rigidBody  (physics as Node Mods)");
+    setWindowTitle("tcxPhysics - trigger  (sensor volume)");
 
-    cam.setTarget(0.0f, 0.5f, 0.0f);
-    cam.setDistance(6.0f);
+    cam.setTarget(0.0f, 1.0f, 0.0f);
+    cam.setDistance(7.0f);
     cam.setAzimuth(0.6f);
-    cam.setElevation(0.35f);
+    cam.setElevation(0.3f);
     cam.enableMouseInput();
 
     keyLight.setDirectional(Vec3(-0.4f, -1.0f, -0.6f));
@@ -28,24 +28,28 @@ void tcApp::setup() {
     fillLight.setIntensity(1.1f);
     addLight(fillLight);
 
-    defaultWorld().setup();              // the singleton world Props attach to
+    defaultWorld().setup();
     defaultWorld().addGroundPlane(0.0f);
 
-    spawn(12);
+    // A wide, flat sensor slab floating at mid-height — cubes fall through it.
+    auto g = make_shared<Gate>(Vec3(0.0f, 1.4f, 0.0f), Vec3(2.6f, 0.5f, 2.6f));
+    gate = g.get();
+    addChild(g);
+
+    spawn(8);
 }
 
 void tcApp::spawn(int n) {
     for (int i = 0; i < n; i++) {
-        Color base(random(0.15f, 0.95f), random(0.15f, 0.95f), random(0.15f, 0.95f));
-        Vec3  pos(random(-1.2f, 1.2f), random(2.5f, 3.5f), random(-1.2f, 1.2f));
-        // One self-contained object — no world passed; it uses the default world.
-        addChild(make_shared<Prop>(base, pos));
+        Color base(random(0.15f, 0.6f), random(0.3f, 0.7f), random(0.5f, 0.95f));
+        Vec3  pos(random(-0.9f, 0.9f), random(3.5f, 4.5f), random(-0.9f, 0.9f));
+        addChild(make_shared<Faller>(base, pos));
     }
 }
 
 void tcApp::update() {
     float dt = std::min(0.05f, std::max(0.0f, (float)getDeltaTime()));
-    defaultWorld().update(dt);   // Props' RigidBody mods sync after this
+    defaultWorld().update(dt);
 }
 
 void tcApp::beginDraw() {
@@ -62,25 +66,26 @@ void tcApp::endDraw() {
     cam.end();
     setColor(1.0f);
     drawBitmapString(
-        "bodies: " + std::to_string((int)getChildCount()) + "\n" +
+        "inside gate: " + std::to_string(gate ? gate->occupants() : 0) + "\n" +
         "\n" +
-        "Each body is a self-contained Prop (Prop.h):\n" +
-        "a Node + RigidBody + ColliderRenderer that\n" +
-        "handles its own collisions (flash = impact,\n" +
-        "warm glow = resting).\n" +
+        "The blue box is a TRIGGER (sensor): a static\n" +
+        "RigidBody with setTrigger(true). Cubes fall\n" +
+        "straight THROUGH it (no collision response) and\n" +
+        "flare white while overlapping. The gate counts\n" +
+        "occupants via onTrigger Began/Ended and glows.\n" +
         "\n" +
-        "click: drop shapes   R: clear\n" +
-        "drag:  orbit camera",
+        "click: drop cubes   R: clear   drag: orbit",
         20.0f, 20.0f);
 }
 
 void tcApp::mousePressed(Vec2 pos, int button) {
-    (void)pos; (void)button;
-    spawn(6);
+    spawn(5);
 }
 
 void tcApp::keyPressed(int key) {
     if (key == 'R') {
-        for (auto& child : getChildren()) child->destroy();
+        // Clear the fallers but keep the gate.
+        for (auto& child : getChildren())
+            if (child.get() != (Node*)gate) child->destroy();
     }
 }

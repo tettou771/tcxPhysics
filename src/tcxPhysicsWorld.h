@@ -24,6 +24,31 @@ struct ContactEventArgs {
                           // (began only) — handy for impact sound / vfx intensity
 };
 
+// How a body moves under the simulation.
+//   Static    - never moves (floor, walls).
+//   Kinematic - moved by YOU (setPosition / moveKinematic); pushes dynamics but
+//               ignores forces, gravity and collisions back on itself.
+//   Dynamic   - fully simulated (falls, collides, responds to forces).
+enum class MotionType { Static, Kinematic, Dynamic };
+
+// =============================================================================
+// RaycastHit - result of PhysicsWorld::raycast().
+//
+// `hit` is false when the ray reached maxDistance without touching anything; the
+// struct is also contextually convertible to bool, so `if (auto h = world.raycast(...))`
+// reads cleanly. On a hit, `body` is the body struck, `point` the world-space
+// impact, `normal` its outward surface normal, `distance` how far along the ray.
+// =============================================================================
+struct RaycastHit {
+    bool        hit = false;
+    PhysicsBody body;
+    tc::Vec3    point;
+    tc::Vec3    normal;
+    float       distance = 0.0f;
+
+    explicit operator bool() const { return hit; }
+};
+
 // =============================================================================
 // PhysicsWorld - owns the Jolt simulation and acts as a factory for bodies.
 //
@@ -90,8 +115,9 @@ public:
     // even though Jolt detects contacts on worker threads.
     //
     //   listener = world.contactBegan.listen([](ContactEventArgs& c){ ... });
-    tc::Event<ContactEventArgs> contactBegan;  // two bodies started touching
-    tc::Event<ContactEventArgs> contactEnded;  // two bodies stopped touching
+    tc::Event<ContactEventArgs> contactBegan;      // two bodies started touching
+    tc::Event<ContactEventArgs> contactPersisted;  // still touching (fires every step — can be heavy)
+    tc::Event<ContactEventArgs> contactEnded;      // two bodies stopped touching
 
     // --- body factory --------------------------------------------------------
     // dynamic = true  -> falls and collides (a thrown block)
@@ -127,6 +153,19 @@ public:
     // A large flat static box acting as the ground, centered on (0, y, 0).
     PhysicsBody addGroundPlane(float y = 0.0f, float size = 100000.0f);
 
+    // --- queries -------------------------------------------------------------
+    // Cast a ray from `origin` along `direction` (need not be normalized) up to
+    // maxDistance, returning the CLOSEST body hit. Use for mouse picking (build
+    // the ray from the camera), line-of-sight, ground probes, shooting, etc.
+    // Static, kinematic and dynamic bodies are all hit; sensors are ignored.
+    RaycastHit raycast(const tc::Vec3& origin, const tc::Vec3& direction,
+                       float maxDistance = 1.0e6f) const;
+    // Convenience overload: cast a tc::Ray (e.g. from a camera's
+    // CameraContext::screenPointToRay for mouse picking).
+    RaycastHit raycast(const tc::Ray& ray, float maxDistance = 1.0e6f) const {
+        return raycast(ray.origin, ray.direction, maxDistance);
+    }
+
     void removeBody(const PhysicsBody& body);
     // Remove every dynamic body but keep static scenery (floor/walls).
     void clearDynamicBodies();
@@ -156,6 +195,18 @@ public:
 
     void setBodyPosition(uint32_t id, const tc::Vec3& p);
     void setBodyRotation(uint32_t id, const tc::Quaternion& q);
+
+    // Switch a body between static / kinematic / dynamic after creation.
+    void setBodyMotionType(uint32_t id, MotionType type);
+    // Drive a KINEMATIC body toward (pos, rot) over dt: Jolt derives the velocity
+    // so the body smoothly pushes the dynamic bodies it meets (unlike setPosition,
+    // which teleports and imparts no momentum). Call every frame with the frame dt.
+    void moveBodyKinematic(uint32_t id, const tc::Vec3& pos, const tc::Quaternion& rot, float dt);
+
+    // A sensor (trigger volume) reports overlaps via the normal contact events but
+    // produces NO collision response — bodies pass straight through it.
+    void setBodyIsSensor(uint32_t id, bool sensor);
+    bool isBodySensor(uint32_t id) const;
 
     void setBodyFriction(uint32_t id, float friction);
     float getBodyFriction(uint32_t id) const;

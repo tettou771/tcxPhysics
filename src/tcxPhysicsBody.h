@@ -6,6 +6,7 @@
 namespace tcx {
 
 class PhysicsWorld;
+enum class MotionType;   // defined in tcxPhysicsWorld.h (Static / Kinematic / Dynamic)
 
 // =============================================================================
 // PhysicsBody - a lightweight handle to one rigid body inside a PhysicsWorld.
@@ -61,6 +62,19 @@ public:
     // spawning / resetting, not for driving motion (use velocity for that).
     const PhysicsBody& setPosition(const tc::Vec3& p) const;
     const PhysicsBody& setRotation(const tc::Quaternion& q) const;
+
+    // --- motion type ---------------------------------------------------------
+    // Switch between static / kinematic / dynamic at runtime.
+    const PhysicsBody& setMotionType(MotionType type) const;
+    // Drive a KINEMATIC body toward (pos, rot) over dt so it pushes dynamics with
+    // the right momentum (call every frame with the frame dt). See PhysicsWorld.
+    const PhysicsBody& moveKinematic(const tc::Vec3& pos, const tc::Quaternion& rot, float dt) const;
+
+    // --- sensor (trigger) ----------------------------------------------------
+    // A sensor reports overlaps (via contact events) but never blocks motion —
+    // bodies pass through it. Toggle it on a normal body to make a trigger volume.
+    const PhysicsBody& setSensor(bool sensor) const;
+    bool isSensor() const;
 
     // --- material ------------------------------------------------------------
     const PhysicsBody& setFriction(float friction) const;        // 0 = ice, ~1 = grippy
