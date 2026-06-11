@@ -123,6 +123,12 @@ public:
         : world_(&defaultWorld()), shape_(shape), type_(type), density_(density) {}
 
     const PhysicsBody& body() const { return body_; }
+
+    // True while THIS mod is writing the body transform into the node
+    // (earlyUpdate sync). Lets app code listening to the node's transform
+    // events distinguish "physics moved the node" from "someone edited the
+    // node" — pushing edits back to the body without stomping the sync.
+    bool isSyncing() const { return syncing_; }
     const ColliderShape& shape() const { return shape_; }
 
     // PHYSICS material (chainable; applied immediately if the body exists).
@@ -161,6 +167,38 @@ public:
     float getRestitution() const { return body_.isValid() ? body_.getRestitution() : restitution_; }
     float getDensity() const     { return density_; }
     bool  isWireframe() const    { return wireframe_; }
+
+    // --- axis locks (Unity-style constraints) --------------------------------
+    // Lock movement / rotation per WORLD axis (true = locked). Chainable;
+    // applied immediately if the body exists, else at attach.
+    RigidBody& lockTranslation(bool x, bool y, bool z) {
+        setDofLock(0x01u, x); setDofLock(0x02u, y); setDofLock(0x04u, z); return *this;
+    }
+    RigidBody& lockRotation(bool x, bool y, bool z) {
+        setDofLock(0x08u, x); setDofLock(0x10u, y); setDofLock(0x20u, z); return *this;
+    }
+    // Never tip over (upright characters): all rotation locked.
+    RigidBody& freezeRotation() { return lockRotation(true, true, true); }
+    // 2D physics in the X/Y plane: move X/Y + rotate around Z only.
+    RigidBody& lock2D() {
+        allowedDofs_ = 0x01u | 0x02u | 0x20u;
+        if (body_.isValid()) body_.setAllowedDofs(allowedDofs_);
+        return *this;
+    }
+
+    // Per-axis lock state, for the inspector checkboxes below.
+    bool getLockPosX() const { return !(allowedDofs_ & 0x01u); }
+    bool getLockPosY() const { return !(allowedDofs_ & 0x02u); }
+    bool getLockPosZ() const { return !(allowedDofs_ & 0x04u); }
+    bool getLockRotX() const { return !(allowedDofs_ & 0x08u); }
+    bool getLockRotY() const { return !(allowedDofs_ & 0x10u); }
+    bool getLockRotZ() const { return !(allowedDofs_ & 0x20u); }
+    void setLockPosX(bool v) { setDofLock(0x01u, v); }
+    void setLockPosY(bool v) { setDofLock(0x02u, v); }
+    void setLockPosZ(bool v) { setDofLock(0x04u, v); }
+    void setLockRotX(bool v) { setDofLock(0x08u, v); }
+    void setLockRotY(bool v) { setDofLock(0x10u, v); }
+    void setLockRotZ(bool v) { setDofLock(0x20u, v); }
 
     // --- joints --------------------------------------------------------------
     // Constrain this body to another node's RigidBody. The OTHER node is the
@@ -274,6 +312,12 @@ public:
         TC_PROPERTY(restitution, getRestitution, setRestitution)
         TC_PROPERTY(trigger, isTrigger, setTrigger)
         TC_PROPERTY(collisionLayer, getCollisionLayer, setCollisionLayer)
+        TC_PROPERTY(lockPosX, getLockPosX, setLockPosX)
+        TC_PROPERTY(lockPosY, getLockPosY, setLockPosY)
+        TC_PROPERTY(lockPosZ, getLockPosZ, setLockPosZ)
+        TC_PROPERTY(lockRotX, getLockRotX, setLockRotX)
+        TC_PROPERTY(lockRotY, getLockRotY, setLockRotY)
+        TC_PROPERTY(lockRotZ, getLockRotZ, setLockRotZ)
         TC_PROPERTY(wireframe, isWireframe, setWireframe)
     TC_REFLECT_END
 
@@ -300,6 +344,7 @@ protected:
             if (restitution_ >= 0.0f) body_.setRestitution(restitution_);
             if (layer_ >= 0)          body_.setCollisionLayer(layer_);
             if (mask_ >= 0)           body_.setCollisionMask((uint32_t)mask_);
+            if (allowedDofs_ != 0x3fu) body_.setAllowedDofs(allowedDofs_);
 
             // Register for collision routing. The first body on this world hooks
             // the world's contact events.
@@ -325,10 +370,12 @@ protected:
         if (n->isDead()) return;
         // Body transform is WORLD-space; the node stores LOCAL, so convert through
         // the parent (handles nesting; a top-level/identity parent is a no-op).
+        syncing_ = true;
         tc::Vec3 wpos = body_.getPosition();
         auto parent = n->getParent();
         n->setPos(parent ? parent->globalToLocal(wpos) : wpos);
         n->setQuaternion(parentGlobalQuat(n).conjugate() * body_.getRotation());
+        syncing_ = false;
     }
 
     // Kinematic: the node drives the body — sync AFTER Node::update() so we pick up
@@ -388,6 +435,12 @@ private:
         }
     }
 
+    // Lock/unlock one allowed-DOF bit and push to the live body.
+    void setDofLock(uint32_t bit, bool locked) {
+        if (locked) allowedDofs_ &= ~bit; else allowedDofs_ |= bit;
+        if (body_.isValid()) body_.setAllowedDofs(allowedDofs_);
+    }
+
     // Core has no getGlobalQuaternion(), so walk the parent chain.
     static tc::Quaternion parentGlobalQuat(tc::Node* n) {
         tc::Quaternion q = tc::Quaternion::identity();
@@ -399,6 +452,7 @@ private:
     }
 
     PhysicsWorld* world_ = nullptr;
+    bool syncing_ = false;
     ColliderShape shape_;
     BodyType type_ = BodyType::Dynamic;
     float density_ = 1000.0f;
@@ -407,6 +461,7 @@ private:
     bool trigger_ = false;
     int layer_ = -1;        // pending collision layer (-1 = default)
     int64_t mask_ = -1;     // pending collision mask (-1 = default 0xff)
+    uint32_t allowedDofs_ = 0x3fu;   // allowed-DOF bits (0x3f = all free)
     PhysicsBody body_;
     std::weak_ptr<int> worldAlive_;
     bool wireframe_ = false;
