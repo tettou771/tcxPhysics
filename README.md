@@ -134,6 +134,8 @@ lives in the `PhysicsWorld`. The setters return `*this`, so they chain.
 | `moveKinematic(pos, rot, dt)` | Drive a kinematic body so it pushes dynamics with real momentum (call each frame). |
 | `setSensor(bool)` / `isSensor()` | Make this body a trigger — detects overlaps, blocks nothing. |
 | `setUserData(uint64)` / `getUserData()` | Free 64-bit tag — name your bodies in contact events / raycast hits. |
+| `lockRotation(x, y, z)` / `lockTranslation(x, y, z)` | Unity-style constraints: lock movement/rotation per world axis (true = locked). |
+| `freezeRotation()` / `lock2D()` | Shortcuts: never tip over / 2D physics in the X-Y plane (move X/Y, spin Z). |
 | `setCollisionLayer(0..7)` / `setCollisionMask(bits)` | Which layer this body is on / which layers it hits. |
 | `setFriction(f)` / `getFriction()` | `0` = ice, `~1` = grippy. |
 | `setRestitution(r)` / `getRestitution()` | `0` = dead, `1` = full bounce. |

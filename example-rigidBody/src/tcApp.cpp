@@ -46,6 +46,7 @@ void tcApp::spawn(int n) {
 void tcApp::update() {
     float dt = std::min(0.05f, std::max(0.0f, (float)getDeltaTime()));
     defaultWorld().update(dt);   // Props' RigidBody mods sync after this
+
 }
 
 void tcApp::beginDraw() {

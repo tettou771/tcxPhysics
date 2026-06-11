@@ -82,6 +82,19 @@ public:
     const PhysicsBody& setUserData(uint64_t data) const;
     uint64_t getUserData() const;
 
+    // --- axis locks (degrees of freedom) -------------------------------------
+    // Unity-style constraints: lock movement / rotation per WORLD axis.
+    // true = that axis is locked. Runtime-changeable; the body is woken.
+    const PhysicsBody& lockTranslation(bool x, bool y, bool z) const;
+    const PhysicsBody& lockRotation(bool x, bool y, bool z) const;
+    // Never tip over (upright characters): all three rotations locked.
+    const PhysicsBody& freezeRotation() const { return lockRotation(true, true, true); }
+    // 2D physics in the X/Y plane: move X/Y + rotate around Z only.
+    const PhysicsBody& lock2D() const;
+    // Raw allowed-DOF bits (1,2,4 = move X,Y,Z; 8,16,32 = rotate X,Y,Z).
+    const PhysicsBody& setAllowedDofs(uint32_t bits) const;
+    uint32_t getAllowedDofs() const;
+
     // --- collision filtering -----------------------------------------------
     // A body lives on ONE layer (0..7) and carries a mask of layers it collides
     // with (bit n = layer n). Both sides must agree: A and B collide iff A's

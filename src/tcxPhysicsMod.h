@@ -200,17 +200,6 @@ public:
     void setLockRotY(bool v) { setDofLock(0x10u, v); }
     void setLockRotZ(bool v) { setDofLock(0x20u, v); }
 
-    // --- joints --------------------------------------------------------------
-    // Constrain this body to another node's RigidBody. The OTHER node is the
-    // base; THIS body is the side that moves positively (motor +velocity, +limits):
-    //
-    //   door->getMod<RigidBody>()->jointTo(frame, Joint::hinge(edge, {0,1,0}));
-    //   // "joint the door TO the frame" — the door swings.
-    //
-    // The world owns the joint; the returned PhysicsJoint is a lightweight
-    // handle. Destroying either node removes the joint automatically.
-    //
-    // NOTE on timing: both bodies must exist. A RigidBody added inside a Node
     // Mouse picking (Mod::hitTest hook): ray vs the collider's bounding box
     // in local space. Any node with a RigidBody becomes selectable by node
     // picking / inspectors with no extra code; return-false = pass-through.
@@ -245,6 +234,18 @@ public:
         outDistance = tmin >= 0 ? tmin : tmax;
         return true;
     }
+
+    // --- joints --------------------------------------------------------------
+    // Constrain this body to another node's RigidBody. The OTHER node is the
+    // base; THIS body is the side that moves positively (motor +velocity, +limits):
+    //
+    //   door->getMod<RigidBody>()->jointTo(frame, Joint::hinge(edge, {0,1,0}));
+    //   // "joint the door TO the frame" — the door swings.
+    //
+    // The world owns the joint; the returned PhysicsJoint is a lightweight
+    // handle. Destroying either node removes the joint automatically.
+    //
+    // NOTE on timing: both bodies must exist. A RigidBody added inside a Node
 
     // subclass's setup() is only created when that setup runs (the node's first
     // frame in the tree) — so wire joints AFTER both nodes are set up (e.g. the

@@ -125,6 +125,48 @@ uint64_t PhysicsBody::getUserData() const {
     return world_->getBodyUserData(id_);
 }
 
+// --- axis locks (degrees of freedom) ------------------------------------------
+namespace {
+constexpr uint32_t kMoveBits = 0x07u;   // 1,2,4 = move X,Y,Z
+constexpr uint32_t kSpinBits = 0x38u;   // 8,16,32 = rotate X,Y,Z
+
+// Apply per-axis locks to one 3-bit group. lock = clear the (allowed) bit.
+uint32_t applyLocks(uint32_t allowed, uint32_t base, bool x, bool y, bool z) {
+    if (x) allowed &= ~(base << 0); else allowed |= (base << 0);
+    if (y) allowed &= ~(base << 1); else allowed |= (base << 1);
+    if (z) allowed &= ~(base << 2); else allowed |= (base << 2);
+    return allowed;
+}
+} // anonymous namespace
+
+const PhysicsBody& PhysicsBody::lockTranslation(bool x, bool y, bool z) const {
+    if (isValid())
+        world_->setBodyAllowedDofs(id_, applyLocks(getAllowedDofs(), 0x01u, x, y, z));
+    return *this;
+}
+
+const PhysicsBody& PhysicsBody::lockRotation(bool x, bool y, bool z) const {
+    if (isValid())
+        world_->setBodyAllowedDofs(id_, applyLocks(getAllowedDofs(), 0x08u, x, y, z));
+    return *this;
+}
+
+const PhysicsBody& PhysicsBody::lock2D() const {
+    // X/Y movement + rotation around Z (Jolt's Plane2D).
+    if (isValid()) world_->setBodyAllowedDofs(id_, 0x01u | 0x02u | 0x20u);
+    return *this;
+}
+
+const PhysicsBody& PhysicsBody::setAllowedDofs(uint32_t bits) const {
+    if (isValid()) world_->setBodyAllowedDofs(id_, bits);
+    return *this;
+}
+
+uint32_t PhysicsBody::getAllowedDofs() const {
+    if (!isValid()) return 0x3fu;
+    return world_->getBodyAllowedDofs(id_);
+}
+
 // --- collision filtering -------------------------------------------------
 const PhysicsBody& PhysicsBody::setCollisionLayer(int layer) const {
     if (isValid()) world_->setBodyCollisionLayer(id_, layer);

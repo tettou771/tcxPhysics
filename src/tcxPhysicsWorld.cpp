@@ -1394,6 +1394,39 @@ uint64_t PhysicsWorld::getBodyUserData(uint32_t id) const {
     return impl_->bodies().GetUserData(JPH::BodyID(id));
 }
 
+void PhysicsWorld::setBodyAllowedDofs(uint32_t id, uint32_t allowedBits) {
+    if (!impl_->initialized || id == PhysicsBody::kInvalidId) return;
+    allowedBits &= 0x3fu;
+    if (allowedBits == 0) {
+        logWarning() << "tcxPhysics: allowed DOFs can't all be locked — use a Static body instead.";
+        return;
+    }
+    {
+        TC_LOCK_GUARD(impl_->simMutex);
+        JPH::BodyLockWrite bodyLock(impl_->physicsSystem.GetBodyLockInterface(), JPH::BodyID(id));
+        if (!bodyLock.Succeeded()) return;
+        JPH::Body& b = bodyLock.GetBody();
+        JPH::MotionProperties* mp = b.GetMotionPropertiesUnchecked();
+        if (!mp) return;   // pure static body (shouldn't happen — we allow switching)
+        // Recompute mass/inertia for the new DOF set from the shape.
+        mp->SetMassProperties((JPH::EAllowedDOFs)allowedBits,
+                              b.GetShape()->GetMassProperties());
+    }
+    // Wake AFTER the body lock is released (ActivateBody re-locks the body).
+    TC_LOCK_GUARD(impl_->simMutex);
+    if (isDynamicLocked(impl_->bodies(), JPH::BodyID(id)))
+        impl_->bodies().ActivateBody(JPH::BodyID(id));
+}
+
+uint32_t PhysicsWorld::getBodyAllowedDofs(uint32_t id) const {
+    if (!impl_->initialized || id == PhysicsBody::kInvalidId) return 0x3fu;
+    TC_LOCK_GUARD(impl_->simMutex);
+    JPH::BodyLockRead bodyLock(impl_->physicsSystem.GetBodyLockInterface(), JPH::BodyID(id));
+    if (!bodyLock.Succeeded()) return 0x3fu;
+    const JPH::MotionProperties* mp = bodyLock.GetBody().GetMotionPropertiesUnchecked();
+    return mp ? (uint32_t)mp->GetAllowedDOFs() : 0x3fu;
+}
+
 void PhysicsWorld::setBodyCollisionLayer(uint32_t id, int layer) {
     if (!impl_->initialized || id == PhysicsBody::kInvalidId) return;
     if (layer < 0) layer = 0;

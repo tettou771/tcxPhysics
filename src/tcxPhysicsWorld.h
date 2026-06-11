@@ -258,6 +258,13 @@ public:
     void setBodyUserData(uint32_t id, uint64_t data);
     uint64_t getBodyUserData(uint32_t id) const;
 
+    // Degrees of freedom (Unity's "constraints"): which WORLD axes the body may
+    // move along / rotate around. Bit set = allowed:
+    //   1,2,4 = move X,Y,Z   8,16,32 = rotate X,Y,Z   0x3f = all (default)
+    // Runtime-changeable; see PhysicsBody::lockRotation/lockTranslation/lock2D.
+    void setBodyAllowedDofs(uint32_t id, uint32_t allowedBits);
+    uint32_t getBodyAllowedDofs(uint32_t id) const;
+
     // Collision filtering: each body belongs to ONE layer (0..7) and carries a
     // MASK of layers it collides with (bit n = layer n). Two bodies collide iff
     // each one's mask contains the other's layer. Defaults: layer 0, mask 0xff
