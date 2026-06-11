@@ -173,6 +173,41 @@ public:
     // handle. Destroying either node removes the joint automatically.
     //
     // NOTE on timing: both bodies must exist. A RigidBody added inside a Node
+    // Mouse picking (Mod::hitTest hook): ray vs the collider's bounding box
+    // in local space. Any node with a RigidBody becomes selectable by node
+    // picking / inspectors with no extra code; return-false = pass-through.
+    bool hitTest(const tc::Ray& localRay, float& outDistance) override {
+        tc::Vec3 half;
+        switch (shape_.kind) {
+            case ColliderShape::Box:      half = shape_.size * 0.5f; break;
+            case ColliderShape::Sphere:   half = tc::Vec3(shape_.radius, shape_.radius, shape_.radius); break;
+            case ColliderShape::Capsule:
+            case ColliderShape::Cylinder:
+                half = tc::Vec3(shape_.radius, shape_.height * 0.5f + shape_.radius, shape_.radius);
+                break;
+            default: return false;
+        }
+        float tmin = -1e30f, tmax = 1e30f;
+        const float o[3] = {localRay.origin.x, localRay.origin.y, localRay.origin.z};
+        const float d[3] = {localRay.direction.x, localRay.direction.y, localRay.direction.z};
+        const float h[3] = {half.x, half.y, half.z};
+        for (int i = 0; i < 3; i++) {
+            if (std::fabs(d[i]) < 1e-8f) {
+                if (o[i] < -h[i] || o[i] > h[i]) return false;
+                continue;
+            }
+            float t1 = (-h[i] - o[i]) / d[i];
+            float t2 = ( h[i] - o[i]) / d[i];
+            if (t1 > t2) std::swap(t1, t2);
+            tmin = std::max(tmin, t1);
+            tmax = std::min(tmax, t2);
+            if (tmin > tmax) return false;
+        }
+        if (tmax < 0) return false;
+        outDistance = tmin >= 0 ? tmin : tmax;
+        return true;
+    }
+
     // subclass's setup() is only created when that setup runs (the node's first
     // frame in the tree) — so wire joints AFTER both nodes are set up (e.g. the
     // frame after spawning), or add the mods directly from app code
