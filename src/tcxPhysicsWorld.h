@@ -185,6 +185,10 @@ public:
     std::vector<PhysicsJoint> getJoints() const;                     // all live joints
     std::vector<PhysicsJoint> getJointsForBody(uint32_t bodyId) const;
 
+    // Fired (main thread) when a breakable joint snaps — see Joint::breakForce.
+    // The joint is already removed when this fires.
+    tc::Event<JointBreakEventArgs> jointBroke;
+
     // --- queried / driven by PhysicsJoint (you rarely call these directly) ---
     bool hasJoint(uint64_t id) const;
     JointType getJointType(uint64_t id) const;
@@ -303,6 +307,9 @@ private:
     PhysicsJoint addJointInternal(uint32_t idA, uint32_t idB, const Joint& def);
     // Shared by the setJointMotor* methods (mode: 0 velocity, 1 target, 2 off).
     void jointMotorCommand(uint64_t id, int mode, float value, float maxForce);
+    // Snap breakable joints whose transmitted force/torque exceeded their
+    // threshold during the last step of duration dt (fires jointBroke).
+    void checkJointBreaks(float dt);
     // Drain worker-collected contacts and fire contactBegan/Ended (main thread).
     void dispatchContacts();
 #ifdef __EMSCRIPTEN__

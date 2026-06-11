@@ -44,6 +44,7 @@ struct Joint {
     tc::Vec3 sixTransMin, sixTransMax;                  // sixDof per-axis travel (m)
     tc::Vec3 sixRotMin, sixRotMax;                      // sixDof per-axis rotation (rad)
     bool sixTransFree = false, sixRotFree = false;      // sixDof: fully open groups
+    float breakForceN = -1.0f, breakTorqueNm = -1.0f;   // breakable (-1 = never)
 
     // A ball joint: pins the two bodies together at one world point. Chains,
     // ragdoll joints, pendulums.
@@ -117,6 +118,24 @@ struct Joint {
     // sixDof: open a whole group completely.
     Joint& freeTranslation() { sixTransFree = true; return *this; }
     Joint& freeRotation()    { sixRotFree = true;  return *this; }
+    // Make the joint BREAKABLE: it removes itself when the force it transmits
+    // exceeds `newtons` (checked after every step; PhysicsWorld::jointBroke
+    // fires so you can react). Rough feel: holding 1 kg still ≈ 10 N.
+    Joint& breakForce(float newtons) { breakForceN = newtons; return *this; }
+    // Same for torque (N·m) — lets a weld snap when twisted (fixed/hinge...).
+    Joint& breakTorque(float newtonMetres) { breakTorqueNm = newtonMetres; return *this; }
+};
+
+// Fired by PhysicsWorld::jointBroke when a breakable joint snaps. The joint is
+// already removed (handles to it report isValid() == false); this tells you
+// where and how hard, e.g. to spawn debris or play a crack.
+struct JointBreakEventArgs {
+    uint64_t jointId = 0;
+    JointType type = JointType::Point;
+    PhysicsBody bodyA, bodyB;     // the sides (world side = invalid handle)
+    tc::Vec3 point;               // world-space anchor where it snapped
+    float force = 0.0f;           // transmitted force at the break (N)
+    float torque = 0.0f;          // transmitted torque at the break (N·m)
 };
 
 // A handle to one live joint. Owns nothing; all accessors query the world.

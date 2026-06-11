@@ -337,6 +337,22 @@ defaultWorld().addGearJoint(hingeA, hingeB, /*ratio*/ 2.0f);          // wheels 
 defaultWorld().addRackAndPinionJoint(hinge, slider, /*rad per m*/ TAU / 0.5f);
 ```
 
+**Breakable joints** snap when overloaded:
+
+```cpp
+// every junction tears above 4000 N (breakTorque(Nm) also available)
+plank->getMod<RigidBody>()->jointTo(prev, Joint::point(p).breakForce(4000.0f));
+
+breakL = defaultWorld().jointBroke.listen([](JointBreakEventArgs& e) {
+    // e.point / e.force / e.bodyA / e.bodyB — spawn debris, play a crack...
+});
+```
+
+The transmitted force is checked after every step (Jolt's solver impulses /
+dt); past the threshold the joint removes itself and `jointBroke` fires.
+Tip: a perfectly straight horizontal chain needs near-infinite tension just to
+hold itself — give bridges and ropes a little initial sag.
+
 Removing a body (or destroying its node) **automatically removes every joint
 touching it** — a joint can never dangle.
 
@@ -434,6 +450,7 @@ wrapper re-locks the same body and deadlocks. Read through the held lock
 | `example-ragdoll/` | Ragdolls — swing-twist shoulders/hips/neck + one-way hinge elbows/knees; toss them around. |
 | `example-gears/` | Transmissions — one motor drives a second wheel through a gear and a rack through a rack-and-pinion. |
 | `example-fixedTimestep/` | `updateAsyncStart` — a fixed 240 Hz step keeps a tall stack solid; per-frame (capped to 30 fps) wobbles and topples. |
+| `example-breakable/` | Breakable joints — a plank bridge with `breakForce` junctions tears apart under dropped weights. |
 | `example-collisionFilter/` | Layers/masks — two teams pass through each other until SPACE makes them collide; user-data tags caption contacts. |
 | `example-joltNativeAccess/` | The raw-Jolt escape hatch — a path constraint (not wrapped) rails a bead onto a closed spline loop. |
 

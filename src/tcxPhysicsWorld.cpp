@@ -222,6 +222,8 @@ struct PhysicsWorld::Impl {
         JPH::Vec3 localAnchorA = JPH::Vec3::sZero();  // local to bodyA
         JPH::Vec3 localAnchorB = JPH::Vec3::sZero();  // local to bodyB (world if none)
         JPH::Vec3 localAxisA = JPH::Vec3::sAxisY();   // local to bodyA
+        float breakForce = -1.0f;                     // N   (-1 = unbreakable)
+        float breakTorque = -1.0f;                    // N·m (-1 = unbreakable)
     };
     vector<JointRec> joints;
     uint64_t nextJointId = 1;
@@ -385,6 +387,7 @@ void PhysicsWorld::update(float dt, int collisionSteps) {
         impl_->physicsSystem.Update(dt, std::max(1, collisionSteps),
                                     impl_->tempAllocator.get(), impl_->jobSystem.get());
     }
+    checkJointBreaks(dt / std::max(1, collisionSteps));
     dispatchContacts();
 }
 
@@ -414,7 +417,10 @@ void PhysicsWorld::updateAsyncStart(float hz) {
     impl_->asyncRunning = true;
     impl_->asyncThread = std::thread([this] { asyncLoop(); });
     // The worker only steps; events are still delivered on the main thread.
-    impl_->frameListener = events().update.listen([this] { dispatchContacts(); });
+    impl_->frameListener = events().update.listen([this] {
+        checkJointBreaks(1.0f / impl_->asyncHz);
+        dispatchContacts();
+    });
 #endif
 }
 
@@ -473,6 +479,7 @@ void PhysicsWorld::webAsyncTick() {
         impl_->webAccum -= step;
         ++steps;
     }
+    if (steps > 0) checkJointBreaks(step);
     dispatchContacts();
 }
 #endif
@@ -955,6 +962,8 @@ PhysicsJoint PhysicsWorld::addJointInternal(uint32_t idA, uint32_t idB, const Jo
         rec.localAnchorA = toLocalPoint(*bodyA, wa);
         rec.localAnchorB = toLocalPoint(*bodyB, wb);
         rec.localAxisA   = toLocalDir(*bodyA, JPH::Vec3(def.axis.x, def.axis.y, def.axis.z).Normalized());
+        rec.breakForce   = def.breakForceN;
+        rec.breakTorque  = def.breakTorqueNm;
         impl_->joints.push_back(rec);
         jointId = rec.id;
     }   // body locks released here — the motor command below re-locks via ActivateBody
@@ -1136,6 +1145,104 @@ Vec3 PhysicsWorld::getJointAxis(uint64_t id) const {
     if (r->bodyA == PhysicsBody::kInvalidId) return toTc(r->localAxisA);  // world base
     JPH::Quat rot = impl_->bodies().GetRotation(JPH::BodyID(r->bodyA));
     return toTc(rot * r->localAxisA);
+}
+
+// --- breakable joints ----------------------------------------------------------
+namespace {
+
+// Total linear / angular impulse (N·s, N·m·s) a constraint applied during the
+// last step, per type (Jolt exposes the solver lambdas).
+void constraintImpulses(JPH::Constraint* c, JointType type, float& outLinear, float& outAngular) {
+    outLinear = 0.0f;
+    outAngular = 0.0f;
+    switch (type) {
+        case JointType::Point:
+            outLinear = static_cast<JPH::PointConstraint*>(c)->GetTotalLambdaPosition().Length();
+            break;
+        case JointType::Hinge: {
+            auto* h = static_cast<JPH::HingeConstraint*>(c);
+            outLinear = h->GetTotalLambdaPosition().Length();
+            auto r = h->GetTotalLambdaRotation();   // the 2 locked rotation axes
+            outAngular = std::sqrt(r[0] * r[0] + r[1] * r[1]);
+            break;
+        }
+        case JointType::Slider: {
+            auto* s = static_cast<JPH::SliderConstraint*>(c);
+            auto p = s->GetTotalLambdaPosition();   // the 2 locked translation axes
+            outLinear = std::sqrt(p[0] * p[0] + p[1] * p[1]);
+            outAngular = s->GetTotalLambdaRotation().Length();
+            break;
+        }
+        case JointType::Distance:
+            outLinear = std::abs(static_cast<JPH::DistanceConstraint*>(c)->GetTotalLambdaPosition());
+            break;
+        case JointType::Fixed: {
+            auto* f = static_cast<JPH::FixedConstraint*>(c);
+            outLinear  = f->GetTotalLambdaPosition().Length();
+            outAngular = f->GetTotalLambdaRotation().Length();
+            break;
+        }
+        case JointType::Cone: {
+            auto* k = static_cast<JPH::ConeConstraint*>(c);
+            outLinear  = k->GetTotalLambdaPosition().Length();
+            outAngular = std::abs(k->GetTotalLambdaRotation());
+            break;
+        }
+        case JointType::SwingTwist: {
+            auto* st = static_cast<JPH::SwingTwistConstraint*>(c);
+            outLinear = st->GetTotalLambdaPosition().Length();
+            float tw = st->GetTotalLambdaTwist(), sy = st->GetTotalLambdaSwingY(), sz = st->GetTotalLambdaSwingZ();
+            outAngular = std::sqrt(tw * tw + sy * sy + sz * sz);
+            break;
+        }
+        case JointType::SixDof: {
+            auto* sd = static_cast<JPH::SixDOFConstraint*>(c);
+            outLinear  = sd->GetTotalLambdaPosition().Length();
+            outAngular = sd->GetTotalLambdaRotation().Length();
+            break;
+        }
+        case JointType::Gear:
+            outAngular = std::abs(static_cast<JPH::GearConstraint*>(c)->GetTotalLambda());
+            break;
+        case JointType::RackAndPinion:
+            outAngular = std::abs(static_cast<JPH::RackAndPinionConstraint*>(c)->GetTotalLambda());
+            break;
+    }
+}
+
+} // anonymous namespace
+
+void PhysicsWorld::checkJointBreaks(float dt) {
+    if (!impl_->initialized || dt <= 0.0f) return;
+    std::vector<JointBreakEventArgs> broken;
+    {
+        TC_LOCK_GUARD(impl_->simMutex);
+        auto& v = impl_->joints;
+        for (auto it = v.begin(); it != v.end();) {
+            if (it->breakForce <= 0.0f && it->breakTorque <= 0.0f) { ++it; continue; }
+            float impulse = 0.0f, angImpulse = 0.0f;
+            constraintImpulses(it->constraint.GetPtr(), it->type, impulse, angImpulse);
+            float force  = impulse / dt;       // impulse over one step -> force
+            float torque = angImpulse / dt;
+            bool snap = (it->breakForce  > 0.0f && force  > it->breakForce)
+                     || (it->breakTorque > 0.0f && torque > it->breakTorque);
+            if (!snap) { ++it; continue; }
+
+            JointBreakEventArgs e;
+            e.jointId = it->id;
+            e.type    = it->type;
+            e.bodyA   = (it->bodyA != PhysicsBody::kInvalidId) ? PhysicsBody(this, it->bodyA) : PhysicsBody();
+            e.bodyB   = (it->bodyB != PhysicsBody::kInvalidId) ? PhysicsBody(this, it->bodyB) : PhysicsBody();
+            e.point   = toTc(impl_->anchorWorld(it->bodyA, it->localAnchorA));
+            e.force   = force;
+            e.torque  = torque;
+            impl_->physicsSystem.RemoveConstraint(it->constraint.GetPtr());
+            it = v.erase(it);
+            broken.push_back(e);
+        }
+    }
+    // Notify OUTSIDE the sim lock — handlers may freely talk to the world.
+    for (auto& e : broken) jointBroke.notify(e);
 }
 
 // --- joint motors ------------------------------------------------------------
