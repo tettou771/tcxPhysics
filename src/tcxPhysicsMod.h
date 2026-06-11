@@ -305,22 +305,21 @@ public:
 
     // Reflection: shows up in inspectors (e.g. tcxNodeInspector) with live,
     // editable physics state. Setters run, so edits hit the Jolt body.
-    using Super = tc::Mod;
-    TC_REFLECT(RigidBody)
-        TC_ENUM_PROPERTY(bodyType, getBodyType, setBodyType)
-        TC_PROPERTY_RO(density, getDensity)
-        TC_PROPERTY(friction, getFriction, setFriction)
-        TC_PROPERTY(restitution, getRestitution, setRestitution)
-        TC_PROPERTY(trigger, isTrigger, setTrigger)
-        TC_PROPERTY(collisionLayer, getCollisionLayer, setCollisionLayer)
-        TC_PROPERTY(lockPosX, getLockPosX, setLockPosX)
-        TC_PROPERTY(lockPosY, getLockPosY, setLockPosY)
-        TC_PROPERTY(lockPosZ, getLockPosZ, setLockPosZ)
-        TC_PROPERTY(lockRotX, getLockRotX, setLockRotX)
-        TC_PROPERTY(lockRotY, getLockRotY, setLockRotY)
-        TC_PROPERTY(lockRotZ, getLockRotZ, setLockRotZ)
-        TC_PROPERTY(wireframe, isWireframe, setWireframe)
-    TC_REFLECT_END
+    TC_REFLECT(RigidBody, tc::Mod) {
+        TC_VALUE(bodyType, getBodyType, setBodyType)
+        TC_VALUE(density, getDensity)                 // no setter = read-only
+        TC_VALUE(friction, getFriction, setFriction)
+        TC_VALUE(restitution, getRestitution, setRestitution)
+        TC_VALUE(trigger, isTrigger, setTrigger)
+        TC_VALUE(collisionLayer, getCollisionLayer, setCollisionLayer)
+        TC_VALUE(lockPosX, getLockPosX, setLockPosX)
+        TC_VALUE(lockPosY, getLockPosY, setLockPosY)
+        TC_VALUE(lockPosZ, getLockPosZ, setLockPosZ)
+        TC_VALUE(lockRotX, getLockRotX, setLockRotX)
+        TC_VALUE(lockRotY, getLockRotY, setLockRotY)
+        TC_VALUE(lockRotZ, getLockRotZ, setLockRotZ)
+        TC_VALUE(wireframe, isWireframe, setWireframe)
+    }
 
 protected:
     void setup() override {
