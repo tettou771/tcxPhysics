@@ -102,6 +102,7 @@ cube count and FPS readout.
 | `setBodyMotionType(id, MotionType)` / `moveBodyKinematic(id, pos, rot, dt)` | Switch a body's motion type / drive a kinematic one — see [Kinematic bodies](#kinematic-bodies). |
 | `setBodyIsSensor(id, bool)` / `isBodySensor(id)` | Make a body a trigger (sensor) — see [Sensors (triggers)](#sensors-triggers). |
 | `setBodyUserData(id, uint64)` / `getBodyUserData(id)` | Free 64-bit tag per body (an id, an index, a packed pointer). |
+| `addCharacter(pos, radius, cylinderHeight, maxSlope)` / `removeCharacter(c)` | A walking-character controller — see [Characters](#characters). |
 | `setBodyCollisionLayer(id, 0..7)` / `setBodyCollisionMask(id, bits)` | Collision filtering — see [Collision filtering](#collision-filtering). |
 | `updateAsyncStart(hz = 120)` / `updateAsyncStop()` / `isAsync()` | Step on a fixed-timestep clock — see [Async stepping](#async-stepping). |
 | `contactBegan` / `contactPersisted` / `contactEnded` | `tc::Event<ContactEventArgs>` — see [Contact events](#contact-events). |
@@ -272,6 +273,35 @@ platform.moveKinematic(targetPos, targetRot, getDeltaTime());
 ```
 
 Example: `example-kinematic/`.
+
+---
+
+## Characters
+
+A **character controller** (Jolt `CharacterVirtual`): a virtual capsule you
+steer with a desired velocity, with all the game-feel locomotion handled for
+you — climbs slopes up to a limit, steps up stairs without jumping, slides
+along walls, rides moving platforms, pushes dynamic bodies. It is not a rigid
+body (forces don't apply), but it carries an inner kinematic body so raycasts
+hit it and sensors see it.
+
+The node-level way (Mod):
+
+```cpp
+player->addMod<CharacterBody>(/*radius*/0.3f, /*cylinderHeight*/0.8f);
+// every frame: desired HORIZONTAL velocity in m/s (gamepad stick * speed, or
+// a normalized WASD direction * speed — usually rotated camera-relative)
+ch->setMoveInput(dir * 4.0f);
+if (spacePressed && ch->isGrounded()) ch->jump(5.0f);
+```
+
+World-level: `world.addCharacter(pos, radius, cylinderHeight, maxSlopeAngle)`
+returns a `PhysicsCharacter` handle (`setMoveInput` / `jump` / `isGrounded` /
+`isOnSteepSlope` / `getGroundNormal` / `setPosition`). The world advances every
+character inside `update()` — nothing extra to call.
+
+Example: `example-character/` (WASD + SPACE playground: ramp, too-steep cliff,
+stairs, riding platform, pushable crates).
 
 ---
 
@@ -450,6 +480,7 @@ wrapper re-locks the same body and deadlocks. Read through the held lock
 | `example-ragdoll/` | Ragdolls — swing-twist shoulders/hips/neck + one-way hinge elbows/knees; toss them around. |
 | `example-gears/` | Transmissions — one motor drives a second wheel through a gear and a rack through a rack-and-pinion. |
 | `example-fixedTimestep/` | `updateAsyncStart` — a fixed 240 Hz step keeps a tall stack solid; per-frame (capped to 30 fps) wobbles and topples. |
+| `example-character/` | Character controller — WASD/SPACE playground: walkable ramp, too-steep cliff, stairs, riding platform, crates. |
 | `example-breakable/` | Breakable joints — a plank bridge with `breakForce` junctions tears apart under dropped weights. |
 | `example-collisionFilter/` | Layers/masks — two teams pass through each other until SPACE makes them collide; user-data tags caption contacts. |
 | `example-joltNativeAccess/` | The raw-Jolt escape hatch — a path constraint (not wrapped) rails a bead onto a closed spline loop. |

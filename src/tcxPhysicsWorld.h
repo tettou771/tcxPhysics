@@ -6,6 +6,7 @@
 #include <vector>
 #include "tcxPhysicsBody.h"
 #include "tcxPhysicsJoint.h"
+#include "tcxPhysicsCharacter.h"
 
 namespace tcx {
 
@@ -189,6 +190,29 @@ public:
     // The joint is already removed when this fires.
     tc::Event<JointBreakEventArgs> jointBroke;
 
+    // --- characters ------------------------------------------------------------
+    // A walking-character controller (capsule centered on `position`): climbs
+    // slopes up to maxSlopeAngle (rad), steps up stairs, slides along walls,
+    // rides moving platforms and pushes dynamic bodies. It also carries an inner
+    // kinematic body, so raycasts hit it and sensors see it. Steer it through
+    // the returned PhysicsCharacter handle; the world advances all characters
+    // inside update() — nothing extra to call.
+    PhysicsCharacter addCharacter(const tc::Vec3& position, float radius,
+                                  float cylinderHeight,
+                                  float maxSlopeAngle = 0.8727f /* 50 deg */);
+    void removeCharacter(const PhysicsCharacter& character);
+
+    // --- queried / driven by PhysicsCharacter (you rarely call these directly) -
+    bool hasCharacter(uint64_t id) const;
+    void setCharacterMoveInput(uint64_t id, const tc::Vec3& velocity);
+    void characterJump(uint64_t id, float speed);
+    bool isCharacterGrounded(uint64_t id) const;
+    bool isCharacterOnSteepSlope(uint64_t id) const;
+    tc::Vec3 getCharacterGroundNormal(uint64_t id) const;
+    tc::Vec3 getCharacterPosition(uint64_t id) const;
+    void setCharacterPosition(uint64_t id, const tc::Vec3& p);
+    tc::Vec3 getCharacterLinearVelocity(uint64_t id) const;
+
     // --- queried / driven by PhysicsJoint (you rarely call these directly) ---
     bool hasJoint(uint64_t id) const;
     JointType getJointType(uint64_t id) const;
@@ -310,6 +334,8 @@ private:
     // Snap breakable joints whose transmitted force/torque exceeded their
     // threshold during the last step of duration dt (fires jointBroke).
     void checkJointBreaks(float dt);
+    // Advance every character controller by dt (steering + ExtendedUpdate).
+    void updateCharacters(float dt);
     // Drain worker-collected contacts and fire contactBegan/Ended (main thread).
     void dispatchContacts();
 #ifdef __EMSCRIPTEN__

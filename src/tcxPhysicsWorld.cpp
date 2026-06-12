@@ -38,6 +38,7 @@
 #include <Jolt/Physics/Constraints/RackAndPinionConstraint.h>
 #include <Jolt/Physics/Constraints/SixDOFConstraint.h>
 #include <Jolt/Physics/Constraints/SpringSettings.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
 
 // Compile the opt-in escape-hatch header here too, so it can never silently rot
 // (it's inline-only — no ODR/runtime cost). Jolt is already on the path in this TU.
@@ -246,6 +247,23 @@ struct PhysicsWorld::Impl {
         return nullptr;   // linear scan — joint counts are small
     }
 
+    // --- character registry --------------------------------------------------
+    // CharacterVirtual is not tracked by the PhysicsSystem; the world owns and
+    // advances them (updateCharacters). moveInput/jump are buffered steering.
+    struct CharRec {
+        uint64_t id = 0;
+        JPH::Ref<JPH::CharacterVirtual> ch;
+        JPH::Vec3 moveInput = JPH::Vec3::sZero();   // desired horizontal velocity
+        float jumpSpeed = 0.0f;                     // pending jump (0 = none)
+    };
+    vector<CharRec> characters;
+    uint64_t nextCharId = 1;
+
+    CharRec* findChar(uint64_t id) {
+        for (auto& r : characters) if (r.id == id) return &r;
+        return nullptr;
+    }
+
     // Local anchor -> current world position (world-fixed side stores world).
     JPH::Vec3 anchorWorld(uint32_t bodyId, const JPH::Vec3& local) {
         if (bodyId == 0xffffffffu) return local;
@@ -382,6 +400,9 @@ void PhysicsWorld::update(float dt, int collisionSteps) {
                         "(call updateAsyncStop() first).";
         return;
     }
+    // Characters steer and collide against the current world state first, then
+    // the system step resolves the dynamics (incl. their inner bodies).
+    updateCharacters(dt);
     {
         TC_LOCK_GUARD(impl_->simMutex);
         impl_->physicsSystem.Update(dt, std::max(1, collisionSteps),
@@ -418,6 +439,8 @@ void PhysicsWorld::updateAsyncStart(float hz) {
     impl_->asyncThread = std::thread([this] { asyncLoop(); });
     // The worker only steps; events are still delivered on the main thread.
     impl_->frameListener = events().update.listen([this] {
+        // Characters advance on the frame loop (per-frame steering reads).
+        updateCharacters((float)getDeltaTime());
         checkJointBreaks(1.0f / impl_->asyncHz);
         dispatchContacts();
     });
@@ -474,6 +497,7 @@ void PhysicsWorld::webAsyncTick() {
     if (impl_->webAccum > 0.25) impl_->webAccum = 0.25;
     int steps = 0;
     while (impl_->webAccum >= step && steps < 8) {
+        updateCharacters(step);
         impl_->physicsSystem.Update(step, 1, impl_->tempAllocator.get(),
                                     impl_->jobSystem.get());
         impl_->webAccum -= step;
@@ -1290,6 +1314,149 @@ void PhysicsWorld::setJointMotorTarget(uint64_t id, float target, float maxForce
 
 void PhysicsWorld::setJointMotorOff(uint64_t id) {
     jointMotorCommand(id, 2, 0.0f, -1.0f);
+}
+
+// ---------------------------------------------------------------------------
+// Characters (Jolt CharacterVirtual)
+// ---------------------------------------------------------------------------
+PhysicsCharacter PhysicsWorld::addCharacter(const Vec3& position, float radius,
+                                            float cylinderHeight, float maxSlopeAngle) {
+    if (!impl_->initialized) {
+        logWarning() << "tcxPhysics: addCharacter before setup().";
+        return PhysicsCharacter();
+    }
+    radius = std::max(0.05f, radius);
+    cylinderHeight = std::max(0.0f, cylinderHeight);
+
+    JPH::Ref<JPH::Shape> capsule = new JPH::CapsuleShape(cylinderHeight * 0.5f, radius);
+
+    JPH::CharacterVirtualSettings settings;
+    settings.mShape = capsule;
+    settings.mMaxSlopeAngle = maxSlopeAngle;
+    // Inner kinematic body: raycasts hit the character, sensors see it, and it
+    // helps push dynamic bodies out of the way.
+    settings.mInnerBodyShape = capsule;
+    settings.mInnerBodyLayer = defaultObjectLayer();
+
+    uint64_t charId = 0;
+    {
+        TC_LOCK_GUARD(impl_->simMutex);
+        Impl::CharRec rec;
+        rec.id = impl_->nextCharId++;
+        rec.ch = new JPH::CharacterVirtual(&settings, toJolt(position),
+                                           JPH::Quat::sIdentity(), 0, &impl_->physicsSystem);
+        impl_->characters.push_back(rec);
+        charId = rec.id;
+    }
+    return PhysicsCharacter(this, charId, alive_);
+}
+
+void PhysicsWorld::removeCharacter(const PhysicsCharacter& character) {
+    if (!impl_->initialized) return;
+    TC_LOCK_GUARD(impl_->simMutex);
+    auto& v = impl_->characters;
+    for (auto it = v.begin(); it != v.end(); ++it) {
+        if (it->id == character.getId()) { v.erase(it); return; }   // Ref releases (inner body too)
+    }
+}
+
+void PhysicsWorld::updateCharacters(float dt) {
+    if (!impl_->initialized || dt <= 0.0f || impl_->characters.empty()) return;
+    TC_LOCK_GUARD(impl_->simMutex);
+    JPH::Vec3 gravity = impl_->physicsSystem.GetGravity();
+    const JPH::Vec3 up = JPH::Vec3::sAxisY();
+
+    for (auto& rec : impl_->characters) {
+        JPH::CharacterVirtual& ch = *rec.ch;
+        ch.UpdateGroundVelocity();   // moving platforms
+
+        JPH::Vec3 current = ch.GetLinearVelocity();
+        bool grounded = (ch.GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround);
+
+        JPH::Vec3 newVel;
+        if (grounded && (current.GetY() - ch.GetGroundVelocity().GetY()) < 0.1f) {
+            // Standing: inherit the ground's velocity (riding platforms)...
+            newVel = ch.GetGroundVelocity();
+            // ...and take a pending jump.
+            if (rec.jumpSpeed > 0.0f) newVel += up * rec.jumpSpeed;
+        } else {
+            // Airborne: keep only the vertical component (input gives horizontal).
+            newVel = up * current.Dot(up);
+        }
+        rec.jumpSpeed = 0.0f;
+        newVel += gravity * dt;
+        newVel += rec.moveInput;
+        ch.SetLinearVelocity(newVel);
+
+        // Slope clamp + move + stair stepping + stick-to-floor, all in one.
+        JPH::CharacterVirtual::ExtendedUpdateSettings us;
+        ch.ExtendedUpdate(dt, gravity, us,
+            impl_->physicsSystem.GetDefaultBroadPhaseLayerFilter(defaultObjectLayer()),
+            impl_->physicsSystem.GetDefaultLayerFilter(defaultObjectLayer()),
+            {}, {}, *impl_->tempAllocator);
+    }
+}
+
+bool PhysicsWorld::hasCharacter(uint64_t id) const {
+    if (!impl_->initialized) return false;
+    TC_LOCK_GUARD(impl_->simMutex);
+    return impl_->findChar(id) != nullptr;
+}
+
+void PhysicsWorld::setCharacterMoveInput(uint64_t id, const Vec3& velocity) {
+    if (!impl_->initialized) return;
+    TC_LOCK_GUARD(impl_->simMutex);
+    auto* r = impl_->findChar(id);
+    if (r) r->moveInput = JPH::Vec3(velocity.x, 0.0f, velocity.z);   // horizontal only
+}
+
+void PhysicsWorld::characterJump(uint64_t id, float speed) {
+    if (!impl_->initialized) return;
+    TC_LOCK_GUARD(impl_->simMutex);
+    auto* r = impl_->findChar(id);
+    if (r) r->jumpSpeed = std::max(0.0f, speed);
+}
+
+bool PhysicsWorld::isCharacterGrounded(uint64_t id) const {
+    if (!impl_->initialized) return false;
+    TC_LOCK_GUARD(impl_->simMutex);
+    auto* r = impl_->findChar(id);
+    return r && r->ch->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnGround;
+}
+
+bool PhysicsWorld::isCharacterOnSteepSlope(uint64_t id) const {
+    if (!impl_->initialized) return false;
+    TC_LOCK_GUARD(impl_->simMutex);
+    auto* r = impl_->findChar(id);
+    return r && r->ch->GetGroundState() == JPH::CharacterVirtual::EGroundState::OnSteepGround;
+}
+
+Vec3 PhysicsWorld::getCharacterGroundNormal(uint64_t id) const {
+    if (!impl_->initialized) return Vec3(0, 1, 0);
+    TC_LOCK_GUARD(impl_->simMutex);
+    auto* r = impl_->findChar(id);
+    return r ? toTc(r->ch->GetGroundNormal()) : Vec3(0, 1, 0);
+}
+
+Vec3 PhysicsWorld::getCharacterPosition(uint64_t id) const {
+    if (!impl_->initialized) return Vec3();
+    TC_LOCK_GUARD(impl_->simMutex);
+    auto* r = impl_->findChar(id);
+    return r ? toTc(r->ch->GetPosition()) : Vec3();
+}
+
+void PhysicsWorld::setCharacterPosition(uint64_t id, const Vec3& p) {
+    if (!impl_->initialized) return;
+    TC_LOCK_GUARD(impl_->simMutex);
+    auto* r = impl_->findChar(id);
+    if (r) r->ch->SetPosition(toJolt(p));
+}
+
+Vec3 PhysicsWorld::getCharacterLinearVelocity(uint64_t id) const {
+    if (!impl_->initialized) return Vec3();
+    TC_LOCK_GUARD(impl_->simMutex);
+    auto* r = impl_->findChar(id);
+    return r ? toTc(r->ch->GetLinearVelocity()) : Vec3();
 }
 
 Vec3 PhysicsWorld::getBodyPosition(uint32_t id) const {

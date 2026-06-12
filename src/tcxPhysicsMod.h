@@ -489,6 +489,79 @@ inline void routeContact(PhysicsWorld* w, ContactEventArgs& c, int phase) {
 } // namespace detail
 
 // =============================================================================
+// CharacterBody : a walking-character Mod (Jolt CharacterVirtual).
+//
+//   player->addMod<CharacterBody>(0.3f, 0.8f);   // radius, cylinder height
+//   ...
+//   ch->setMoveInput(dir * 4.0f);                // every frame (m/s, horizontal)
+//   if (spacePressed) ch->jump(5.0f);            // applied if grounded
+//
+// The node follows the character (slopes, stairs, walls, moving platforms all
+// handled). Draw whatever you like on the node — the controller is invisible.
+// =============================================================================
+class CharacterBody : public tc::Mod {
+    friend class trussc::Node;
+
+public:
+    CharacterBody(float radius, float cylinderHeight,
+                  float maxSlopeAngle = 0.8727f /* 50 deg */)
+        : world_(&defaultWorld()), radius_(radius), height_(cylinderHeight),
+          maxSlope_(maxSlopeAngle) {}
+    CharacterBody(PhysicsWorld& world, float radius, float cylinderHeight,
+                  float maxSlopeAngle = 0.8727f)
+        : world_(&world), radius_(radius), height_(cylinderHeight),
+          maxSlope_(maxSlopeAngle) {}
+
+    const PhysicsCharacter& character() const { return char_; }
+
+    // Desired horizontal velocity (m/s), world space — call every frame.
+    CharacterBody& setMoveInput(const tc::Vec3& v) { char_.setMoveInput(v); return *this; }
+    // Upward kick at the next step, if grounded.
+    CharacterBody& jump(float speed = 5.0f) { char_.jump(speed); return *this; }
+
+    bool isGrounded() const      { return char_.isGrounded(); }
+    bool isOnSteepSlope() const  { return char_.isOnSteepSlope(); }
+    tc::Vec3 getGroundNormal() const { return char_.getGroundNormal(); }
+    float getRadius() const { return radius_; }
+    float getHeight() const { return height_; }
+
+    TC_REFLECT(CharacterBody, tc::Mod) {
+        TC_VALUE(grounded, isGrounded)     // no setter = read-only
+        TC_VALUE(radius, getRadius)
+        TC_VALUE(height, getHeight)
+    }
+
+protected:
+    void setup() override {
+        worldAlive_ = world_->aliveToken();
+        char_ = world_->addCharacter(getOwner()->getGlobalPos(), radius_, height_, maxSlope_);
+    }
+
+    // The character drives the node (like a Dynamic RigidBody does).
+    void earlyUpdate() override {
+        if (!char_.isValid()) return;
+        tc::Node* n = getOwner();
+        if (n->isDead()) return;
+        tc::Vec3 wpos = char_.getPosition();
+        auto parent = n->getParent();
+        n->setPos(parent ? parent->globalToLocal(wpos) : wpos);
+    }
+
+    void onDestroy() override {
+        if (!worldAlive_.expired() && world_ && char_.isValid())
+            world_->removeCharacter(char_);
+    }
+
+    bool isExclusive() const override { return true; }
+
+private:
+    PhysicsWorld* world_ = nullptr;
+    float radius_ = 0.3f, height_ = 0.8f, maxSlope_ = 0.8727f;
+    PhysicsCharacter char_;
+    std::weak_ptr<int> worldAlive_;
+};
+
+// =============================================================================
 // ColliderRenderer : draw the sibling RigidBody's shape as solid faces.
 // =============================================================================
 class ColliderRenderer : public tc::Mod {
