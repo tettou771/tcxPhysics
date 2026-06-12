@@ -101,6 +101,7 @@ void tcApp::update() {
 
     for (auto& m : marks) m.age += dt;
     while (!marks.empty() && marks.front().age > 3.0f) marks.erase(marks.begin());
+
 }
 
 void tcApp::beginDraw() {

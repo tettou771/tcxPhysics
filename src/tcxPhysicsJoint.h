@@ -44,7 +44,7 @@ struct Joint {
     tc::Vec3 sixTransMin, sixTransMax;                  // sixDof per-axis travel (m)
     tc::Vec3 sixRotMin, sixRotMax;                      // sixDof per-axis rotation (rad)
     bool sixTransFree = false, sixRotFree = false;      // sixDof: fully open groups
-    float breakForceN = -1.0f, breakTorqueNm = -1.0f;   // breakable (-1 = never)
+    float breakForceN = -1.0f, breakTorqueNm = -1.0f;   // breakable (negative = never)
 
     // A ball joint: pins the two bodies together at one world point. Chains,
     // ragdoll joints, pendulums.
@@ -121,6 +121,9 @@ struct Joint {
     // Make the joint BREAKABLE: it removes itself when the force it transmits
     // exceeds `newtons` (checked after every step; PhysicsWorld::jointBroke
     // fires so you can react). Rough feel: holding 1 kg still ≈ 10 N.
+    // The scale is continuous down to 0 = "snaps under any load at all"
+    // (drive a toughness stat to zero and the joint self-destructs);
+    // a NEGATIVE value puts it back to unbreakable.
     Joint& breakForce(float newtons) { breakForceN = newtons; return *this; }
     // Same for torque (N·m) — lets a weld snap when twisted (fixed/hinge...).
     Joint& breakTorque(float newtonMetres) { breakTorqueNm = newtonMetres; return *this; }

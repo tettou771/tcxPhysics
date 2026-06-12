@@ -502,10 +502,9 @@ public:
     ColliderRenderer& setTexture(const tc::Texture& t)   { material_.setBaseColorTexture(&t); return *this; }
     ColliderRenderer& clearTexture()                     { material_.setBaseColorTexture(nullptr); return *this; }
 
-    using Super = tc::Mod;
-    TC_REFLECT(ColliderRenderer)
-        TC_PROPERTY(color, getColor, setColor)
-    TC_REFLECT_END
+    TC_REFLECT(ColliderRenderer, tc::Mod) {
+        TC_VALUE(color, getColor, setColor)
+    }
 
 protected:
     void draw() override {

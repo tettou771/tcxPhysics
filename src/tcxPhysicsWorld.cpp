@@ -1219,13 +1219,16 @@ void PhysicsWorld::checkJointBreaks(float dt) {
         TC_LOCK_GUARD(impl_->simMutex);
         auto& v = impl_->joints;
         for (auto it = v.begin(); it != v.end();) {
-            if (it->breakForce <= 0.0f && it->breakTorque <= 0.0f) { ++it; continue; }
+            // Negative threshold = unbreakable (the default). Zero is a VALID
+            // threshold: the joint snaps under any load at all — so a toughness
+            // stat can be driven continuously down to "breaks instantly".
+            if (it->breakForce < 0.0f && it->breakTorque < 0.0f) { ++it; continue; }
             float impulse = 0.0f, angImpulse = 0.0f;
             constraintImpulses(it->constraint.GetPtr(), it->type, impulse, angImpulse);
             float force  = impulse / dt;       // impulse over one step -> force
             float torque = angImpulse / dt;
-            bool snap = (it->breakForce  > 0.0f && force  > it->breakForce)
-                     || (it->breakTorque > 0.0f && torque > it->breakTorque);
+            bool snap = (it->breakForce  >= 0.0f && force  > it->breakForce)
+                     || (it->breakTorque >= 0.0f && torque > it->breakTorque);
             if (!snap) { ++it; continue; }
 
             JointBreakEventArgs e;
