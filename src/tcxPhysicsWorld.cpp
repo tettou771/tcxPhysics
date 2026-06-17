@@ -19,6 +19,7 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/Body.h>
 #include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Body/BodyLockMulti.h>
 #include <Jolt/Physics/Collision/ObjectLayerPairFilterMask.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayerInterfaceMask.h>
 #include <Jolt/Physics/Collision/BroadPhase/ObjectVsBroadPhaseLayerFilterMask.h>
@@ -954,16 +955,27 @@ PhysicsJoint PhysicsWorld::addJointInternal(uint32_t idA, uint32_t idB, const Jo
         // body B is the side that moves positively.
         JPH::Body* bodyA = &JPH::Body::sFixedToWorld;
         JPH::Body* bodyB = &JPH::Body::sFixedToWorld;
-        std::optional<JPH::BodyLockWrite> la, lb;
+        // Lock BOTH bodies through ONE multi-lock. Two independent BodyLockWrite
+        // calls deadlock when the two body IDs happen to hash to the same body
+        // mutex (BodyLockInterfaceLocking buckets bodies into a fixed mutex
+        // array): the second LockWrite re-locks a non-recursive SharedMutex the
+        // first already holds, and std::shared_mutex::lock() then waits on its
+        // internal condition_variable forever. BodyLockMultiWrite builds a
+        // deduplicated mutex mask and locks each mutex exactly once, so a shared
+        // bucket is safe. The collision is rare with many mutexes (native) but
+        // common with few (web), which is why this only ever hung on web.
+        JPH::BodyID ids[2] = {
+            idA != PhysicsBody::kInvalidId ? JPH::BodyID(idA) : JPH::BodyID(),
+            idB != PhysicsBody::kInvalidId ? JPH::BodyID(idB) : JPH::BodyID(),
+        };
+        JPH::BodyLockMultiWrite multiLock(lockIf, ids, 2);
         if (idA != PhysicsBody::kInvalidId) {
-            la.emplace(lockIf, JPH::BodyID(idA));
-            if (!la->Succeeded()) return PhysicsJoint();
-            bodyA = &la->GetBody();
+            bodyA = multiLock.GetBody(0);
+            if (!bodyA) return PhysicsJoint();
         }
         if (idB != PhysicsBody::kInvalidId) {
-            lb.emplace(lockIf, JPH::BodyID(idB));
-            if (!lb->Succeeded()) return PhysicsJoint();
-            bodyB = &lb->GetBody();
+            bodyB = multiLock.GetBody(1);
+            if (!bodyB) return PhysicsJoint();
         }
 
         JPH::TwoBodyConstraint* c = createJoltConstraint(def, *bodyA, *bodyB);
@@ -1012,16 +1024,20 @@ PhysicsJoint PhysicsWorld::addGearJoint(const PhysicsJoint& hingeA, const Physic
         // The wheels are the moving sides (body B) of each hinge.
         uint32_t wheelA = ra->bodyB, wheelB = rb->bodyB;
         const JPH::BodyLockInterface& lockIf = impl_->physicsSystem.GetBodyLockInterface();
-        JPH::BodyLockWrite la(lockIf, JPH::BodyID(wheelA));
-        JPH::BodyLockWrite lb(lockIf, JPH::BodyID(wheelB));
-        if (!la.Succeeded() || !lb.Succeeded()) return PhysicsJoint();
+        // One multi-lock — two separate BodyLockWrite self-deadlock when the IDs
+        // share a body-mutex bucket (see addJointInternal).
+        JPH::BodyID ids[2] = { JPH::BodyID(wheelA), JPH::BodyID(wheelB) };
+        JPH::BodyLockMultiWrite multiLock(lockIf, ids, 2);
+        JPH::Body* bodyWheelA = multiLock.GetBody(0);
+        JPH::Body* bodyWheelB = multiLock.GetBody(1);
+        if (!bodyWheelA || !bodyWheelB) return PhysicsJoint();
 
         JPH::GearConstraintSettings s;
         s.mSpace      = JPH::EConstraintSpace::WorldSpace;
         s.mHingeAxis1 = impl_->axisWorld(*ra);
         s.mHingeAxis2 = impl_->axisWorld(*rb);
         s.mRatio      = ratio;
-        auto* c = static_cast<JPH::GearConstraint*>(s.Create(la.GetBody(), lb.GetBody()));
+        auto* c = static_cast<JPH::GearConstraint*>(s.Create(*bodyWheelA, *bodyWheelB));
         // Knowing the hinges lets Jolt correct angular drift between the wheels.
         c->SetConstraints(ra->constraint.GetPtr(), rb->constraint.GetPtr());
         impl_->physicsSystem.AddConstraint(c);
@@ -1055,16 +1071,20 @@ PhysicsJoint PhysicsWorld::addRackAndPinionJoint(const PhysicsJoint& pinionHinge
         }
         uint32_t pinion = rp->bodyB, rack = rr->bodyB;   // the moving sides
         const JPH::BodyLockInterface& lockIf = impl_->physicsSystem.GetBodyLockInterface();
-        JPH::BodyLockWrite la(lockIf, JPH::BodyID(pinion));
-        JPH::BodyLockWrite lb(lockIf, JPH::BodyID(rack));
-        if (!la.Succeeded() || !lb.Succeeded()) return PhysicsJoint();
+        // One multi-lock — two separate BodyLockWrite self-deadlock when the IDs
+        // share a body-mutex bucket (see addJointInternal).
+        JPH::BodyID ids[2] = { JPH::BodyID(pinion), JPH::BodyID(rack) };
+        JPH::BodyLockMultiWrite multiLock(lockIf, ids, 2);
+        JPH::Body* bodyPinion = multiLock.GetBody(0);
+        JPH::Body* bodyRack   = multiLock.GetBody(1);
+        if (!bodyPinion || !bodyRack) return PhysicsJoint();
 
         JPH::RackAndPinionConstraintSettings s;
         s.mSpace      = JPH::EConstraintSpace::WorldSpace;
         s.mHingeAxis  = impl_->axisWorld(*rp);
         s.mSliderAxis = impl_->axisWorld(*rr);
         s.mRatio      = ratio;
-        auto* c = static_cast<JPH::RackAndPinionConstraint*>(s.Create(la.GetBody(), lb.GetBody()));
+        auto* c = static_cast<JPH::RackAndPinionConstraint*>(s.Create(*bodyPinion, *bodyRack));
         c->SetConstraints(rp->constraint.GetPtr(), rr->constraint.GetPtr());
         impl_->physicsSystem.AddConstraint(c);
 
