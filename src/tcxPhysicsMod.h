@@ -32,16 +32,20 @@ namespace tcx {
 
 // What the body is made of.
 struct ColliderShape {
-    enum Kind { Box, Sphere, Capsule, Cylinder };
+    enum Kind { Box, Sphere, Capsule, Cylinder, ConvexHull };
     Kind kind = Box;
     tc::Vec3 size{1.0f, 1.0f, 1.0f};   // box: full extents
     float radius = 0.5f;               // sphere / capsule / cylinder
     float height = 1.0f;               // capsule cylinderHeight / cylinder height
+    tc::Mesh hull;                     // convex hull: collider = hull of these verts
 
     static ColliderShape box(const tc::Vec3& s)     { ColliderShape c; c.kind = Box;      c.size = s;   return c; }
     static ColliderShape sphere(float r)            { ColliderShape c; c.kind = Sphere;   c.radius = r; return c; }
     static ColliderShape capsule(float r, float h)  { ColliderShape c; c.kind = Capsule;  c.radius = r; c.height = h; return c; }
     static ColliderShape cylinder(float r, float h) { ColliderShape c; c.kind = Cylinder; c.radius = r; c.height = h; return c; }
+    // Convex hull of a mesh's vertices (gems, dice, rocks). The mesh is also
+    // used as the render/wireframe mesh.
+    static ColliderShape convexHull(const tc::Mesh& m) { ColliderShape c; c.kind = ConvexHull; c.hull = m; return c; }
 };
 
 // Dynamic   = simulated (physics drives the node).
@@ -72,6 +76,7 @@ inline tc::Mesh buildShapeMesh(const ColliderShape& s) {
         case ColliderShape::Sphere:   return tc::createSphere(s.radius, 20);
         case ColliderShape::Capsule:  return tc::createCapsule(s.radius, s.height, 16);
         case ColliderShape::Cylinder: return tc::createCylinder(s.radius, s.height, 24);
+        case ColliderShape::ConvexHull: return s.hull;
     }
     return tc::Mesh();
 }
@@ -335,6 +340,7 @@ protected:
             case ColliderShape::Sphere:   body_ = world_->addSphere(wpos, shape_.radius, movable, density_); break;
             case ColliderShape::Capsule:  body_ = world_->addCapsule(wpos, shape_.radius, shape_.height, movable, density_); break;
             case ColliderShape::Cylinder: body_ = world_->addCylinder(wpos, shape_.radius, shape_.height, movable, density_); break;
+            case ColliderShape::ConvexHull: body_ = world_->addConvexHull(wpos, shape_.hull, movable, density_); break;
         }
         if (body_.isValid()) {
             body_.setRotation(globalQuat(n));
