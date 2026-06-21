@@ -310,6 +310,18 @@ struct PhysicsWorld::Impl {
     // Web fixed-timestep accumulator (frame-loop driven).
     float  webPrevTime = 0.0f;
     double webAccum = 0.0;
+
+    // Sim time multiplier for the accumulator-based modes (fixed / async). 1 =
+    // real time, 2 = double speed, 0 = paused. Plain float: a benign cross-thread
+    // read in async (set rarely, torn reads harmless for a debug/slow-mo scale).
+    float  timeScale = 1.0f;
+
+    // Synchronous fixed-timestep accumulator (updateFixed / updateFixedStart).
+    double fixedAccum = 0.0;
+    bool   fixedStepping = false;   // updateFixedStart() is driving the frame loop
+    float  fixedHz = 60.0f;
+    int    fixedMaxSteps = 8;
+    EventListener fixedFrameListener;  // events().update hook for auto fixed stepping
 };
 
 // ---------------------------------------------------------------------------
@@ -394,6 +406,13 @@ Vec3 PhysicsWorld::getGravity() const {
     return toTc(impl_->physicsSystem.GetGravity());
 }
 
+PhysicsWorld& PhysicsWorld::setTimeScale(float s) {
+    impl_->timeScale = std::max(0.0f, s);
+    return *this;
+}
+
+float PhysicsWorld::getTimeScale() const { return impl_->timeScale; }
+
 void PhysicsWorld::update(float dt, int collisionSteps) {
     if (!impl_->initialized) return;
     if (impl_->async) {
@@ -401,6 +420,14 @@ void PhysicsWorld::update(float dt, int collisionSteps) {
                         "(call updateAsyncStop() first).";
         return;
     }
+    if (impl_->fixedStepping) {
+        logWarning() << "tcxPhysics: update() ignored while updateFixedStart() runs "
+                        "(call updateFixedStop() first).";
+        return;
+    }
+    // Pre-step inputs (kinematic movers, forces) run in lock-step with the sim —
+    // here that's one step per frame, so physicsUpdate fires once with dt.
+    physicsUpdate.notify(dt);
     // Characters steer and collide against the current world state first, then
     // the system step resolves the dynamics (incl. their inner bodies).
     updateCharacters(dt);
@@ -413,12 +440,106 @@ void PhysicsWorld::update(float dt, int collisionSteps) {
     dispatchContacts();
 }
 
+// One fixed step: fire physicsUpdate (so listeners set kinematic targets / forces
+// for THIS step), then advance characters + dynamics by exactly `step`.
+void PhysicsWorld::fixedStepOnce(float step) {
+    physicsUpdate.notify(step);   // pre-step inputs, in lock-step with the sim
+    updateCharacters(step);
+    {
+        TC_LOCK_GUARD(impl_->simMutex);
+        impl_->physicsSystem.Update(step, 1, impl_->tempAllocator.get(),
+                                    impl_->jobSystem.get());
+    }
+}
+
+// Shared accumulator loop for both the manual updateFixed() and the auto
+// updateFixedStart() listener.
+float PhysicsWorld::fixedTick(float realDt, float hz, int maxSteps) {
+    const float step = 1.0f / std::max(1.0f, hz);
+    const int cap = std::max(1, maxSteps);
+    double scaled = (double)realDt * std::max(0.0f, impl_->timeScale);
+    if (scaled > 0.0) impl_->fixedAccum += scaled;
+    // Cap the catch-up budget at maxSteps worth of time (spiral-of-death guard):
+    // maxSteps is the per-frame step budget, so a big timeScale fast-forward just
+    // needs a big maxSteps — no separate fixed-seconds ceiling fighting it.
+    double maxAcc = (double)cap * step;
+    if (impl_->fixedAccum > maxAcc) impl_->fixedAccum = maxAcc;
+
+    int steps = 0;
+    while (impl_->fixedAccum >= step && steps < cap) {
+        fixedStepOnce(step);
+        impl_->fixedAccum -= step;
+        ++steps;
+    }
+    // Drop any leftover we couldn't consume within the cap so the next frame
+    // starts fresh instead of trying to catch up forever.
+    if (impl_->fixedAccum >= step) impl_->fixedAccum = 0.0;
+
+    if (steps > 0) {
+        checkJointBreaks(step);
+        dispatchContacts();
+    }
+    // Interpolation factor in [0,1): how far into the next step we already are.
+    return (float)(impl_->fixedAccum / step);
+}
+
+float PhysicsWorld::updateFixed(float realDt, float hz, int maxSteps) {
+    if (!impl_->initialized) return 0.0f;
+    if (impl_->async) {
+        logWarning() << "tcxPhysics: updateFixed() ignored while async stepping runs "
+                        "(call updateAsyncStop() first).";
+        return 0.0f;
+    }
+    if (impl_->fixedStepping) {
+        logWarning() << "tcxPhysics: updateFixed() ignored while updateFixedStart() drives "
+                        "the loop (don't call it manually too).";
+        return 0.0f;
+    }
+    return fixedTick(realDt, hz, maxSteps);
+}
+
+void PhysicsWorld::updateFixedStart(float hz, int maxSteps) {
+    if (!impl_->initialized) {
+        logWarning() << "tcxPhysics: updateFixedStart() before setup() — ignored.";
+        return;
+    }
+    if (impl_->async) {
+        logWarning() << "tcxPhysics: updateFixedStart() ignored while async stepping runs "
+                        "(call updateAsyncStop() first).";
+        return;
+    }
+    if (impl_->fixedStepping) return;
+    impl_->fixedStepping  = true;
+    impl_->fixedHz        = std::max(1.0f, hz);
+    impl_->fixedMaxSteps  = std::max(1, maxSteps);
+    impl_->fixedAccum     = 0.0;
+    // Drive the accumulator from the frame loop — synchronous, main-thread, so
+    // physicsUpdate listeners and body writes are always ordered against the sim.
+    impl_->fixedFrameListener = events().update.listen([this] {
+        fixedTick((float)getDeltaTime(), impl_->fixedHz, impl_->fixedMaxSteps);
+    });
+}
+
+void PhysicsWorld::updateFixedStop() {
+    if (!impl_->fixedStepping) return;
+    impl_->fixedStepping = false;
+    impl_->fixedFrameListener = EventListener();  // disconnect from events().update
+    dispatchContacts();                            // flush anything the last step queued
+}
+
+bool PhysicsWorld::isFixedStepping() const { return impl_->fixedStepping; }
+
 // ---------------------------------------------------------------------------
 // Async stepping
 // ---------------------------------------------------------------------------
 void PhysicsWorld::updateAsyncStart(float hz) {
     if (!impl_->initialized) {
         logWarning() << "tcxPhysics: updateAsyncStart() before setup() — ignored.";
+        return;
+    }
+    if (impl_->fixedStepping) {
+        logWarning() << "tcxPhysics: updateAsyncStart() ignored while updateFixedStart() runs "
+                        "(call updateFixedStop() first).";
         return;
     }
     if (impl_->async) return;
@@ -440,8 +561,12 @@ void PhysicsWorld::updateAsyncStart(float hz) {
     impl_->asyncThread = std::thread([this] { asyncLoop(); });
     // The worker only steps; events are still delivered on the main thread.
     impl_->frameListener = events().update.listen([this] {
+        // Steps run off-thread, so the best a main-thread mover can do is set
+        // kinematic targets / forces once per frame with the frame delta.
+        float fdt = (float)getDeltaTime();
+        physicsUpdate.notify(fdt);
         // Characters advance on the frame loop (per-frame steering reads).
-        updateCharacters((float)getDeltaTime());
+        updateCharacters(fdt);
         checkJointBreaks(1.0f / impl_->asyncHz);
         dispatchContacts();
     });
@@ -469,7 +594,7 @@ void PhysicsWorld::asyncLoop() {
     double accum = 0.0;
     while (impl_->asyncRunning) {
         auto now = clock::now();
-        accum += std::chrono::duration<double>(now - prev).count();
+        accum += std::chrono::duration<double>(now - prev).count() * std::max(0.0f, impl_->timeScale);
         prev = now;
         if (accum > 0.25) accum = 0.25;  // clamp catch-up (avoid spiral of death)
         int steps = 0;
@@ -494,10 +619,12 @@ void PhysicsWorld::webAsyncTick() {
     double dt = (double)t - impl_->webPrevTime;
     impl_->webPrevTime = t;
     if (dt < 0.0) dt = 0.0;
-    impl_->webAccum += dt;
+    impl_->webAccum += dt * std::max(0.0f, impl_->timeScale);
     if (impl_->webAccum > 0.25) impl_->webAccum = 0.25;
     int steps = 0;
+    float h = step;   // mutable lvalue for notify(float&)
     while (impl_->webAccum >= step && steps < 8) {
+        physicsUpdate.notify(h);   // pre-step inputs, per fixed step (main thread)
         updateCharacters(step);
         impl_->physicsSystem.Update(step, 1, impl_->tempAllocator.get(),
                                     impl_->jobSystem.get());

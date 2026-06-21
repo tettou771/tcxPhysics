@@ -364,6 +364,11 @@ protected:
                     [w = world_](ContactEventArgs& c) { detail::routeContact(w, c, 2); });
             }
             router.bodies[body_.getId()] = this;
+
+            // Kinematic bodies drive per sim step via physicsUpdate, so their motion
+            // stays in lock-step with the sim in every driver (plain / fixed / async).
+            if (type_ == BodyType::Kinematic)
+                physL_ = world_->physicsUpdate.listen([this](float dt) { driveKinematic(dt); });
         }
     }
 
@@ -384,14 +389,19 @@ protected:
         syncing_ = false;
     }
 
-    // Kinematic: the node drives the body — sync AFTER Node::update() so we pick up
-    // wherever the user just moved the node this frame. moveKinematic derives the
-    // velocity from the delta so the body shoves the dynamics it meets.
-    void update() override {
+    // Kinematic: the node drives the body, in lock-step with the sim. We subscribe
+    // to world.physicsUpdate (in setup) and moveKinematic per step with the step's
+    // dt — so it stays correct whether the world runs plain, fixed, or async, with
+    // no per-mode branching here. moveKinematic derives velocity from
+    // (target - current)/dt, so dt MUST be the time the sim then steps; physicsUpdate
+    // hands us exactly that.
+
+    // Move the kinematic body toward the node's current transform over `dt`.
+    void driveKinematic(float dt) {
         if (type_ != BodyType::Kinematic || !body_.isValid()) return;
         tc::Node* n = getOwner();
         if (n->isDead()) return;
-        body_.moveKinematic(n->getGlobalPos(), globalQuat(n), (float)tc::getDeltaTime());
+        body_.moveKinematic(n->getGlobalPos(), globalQuat(n), dt);
     }
 
     void draw() override {
@@ -470,6 +480,7 @@ private:
     uint32_t allowedDofs_ = 0x3fu;   // allowed-DOF bits (0x3f = all free)
     PhysicsBody body_;
     std::weak_ptr<int> worldAlive_;
+    tc::EventListener physL_;   // per-step kinematic drive (world.physicsUpdate)
     bool wireframe_ = false;
     tc::Color wireColor_{0.3f, 1.0f, 0.5f};
     tc::Mesh wireMesh_;

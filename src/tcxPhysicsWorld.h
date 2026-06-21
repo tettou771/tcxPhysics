@@ -86,6 +86,16 @@ public:
     PhysicsWorld& setGravity(const tc::Vec3& gravity);
     tc::Vec3 getGravity() const;
 
+    // Sim time multiplier for the accumulator-based stepping modes (updateFixed /
+    // updateFixedStart / updateAsyncStart): 1 = real time, 2 = double speed, 0.25 =
+    // quarter-speed slow-mo, 0 = paused. Lets one wall-second drive many sim-seconds
+    // (fast-forward debugging) or vice-versa, at the ship hz/behaviour. Does NOT
+    // affect raw update(dt) (scaling that into one giant step would be unstable).
+    // Note: a large scale is bounded by each mode's per-frame step cap (maxSteps)
+    // and the 0.25 s catch-up clamp, so raise maxSteps for big fast-forwards.
+    PhysicsWorld& setTimeScale(float scale);
+    float getTimeScale() const;
+
     // Advance the simulation by dt seconds. collisionSteps subdivides the step
     // for stability at large dt (1 is fine for ~60fps).
     //
@@ -93,24 +103,67 @@ public:
     // update() is ignored (with a warning).
     void update(float dt = 1.0f / 60.0f, int collisionSteps = 1);
 
+    // Advance the simulation in FIXED hz steps, synchronously, on the frame loop.
+    // Pass the real frame delta; it is accumulated and the sim is stepped in exact
+    // 1/hz increments (zero or more per call), so behaviour is frame-rate
+    // independent — the same regardless of display FPS, on native and web alike.
+    //
+    //   realDt   - real elapsed time this frame (e.g. getDeltaTime()).
+    //   hz       - fixed simulation rate (steps per second).
+    //   maxSteps - per-frame step cap; guards against the spiral of death on a
+    //              hitch. Leftover accumulated time beyond the cap is dropped.
+    //
+    // Returns the interpolation factor alpha in [0,1) — how far into the next
+    // pending step the accumulator already sits — for optional render
+    // interpolation. Ignore it for the simple (non-interpolated) case.
+    //
+    // Use this OR update() OR the stepping modes below — not a mix in one frame.
+    // While updateFixedStart() drives the loop, calling this manually is ignored.
+    float updateFixed(float realDt, float hz = 60.0f, int maxSteps = 8);
+
     // --- stepping mode -------------------------------------------------------
     // By default you drive the sim yourself with update(dt) once per frame.
     //
-    // Alternatively, run the simulation on its own fixed-timestep clock so the
-    // physics stays stable independent of frame rate / hitches:
-    //   world.updateAsyncStart(120);   // step at 120 Hz on a background thread
-    //   ...
-    //   world.updateAsyncStop();
-    // Body reads and force/velocity calls stay safe while async runs — they are
-    // serialized against the step. Collision events still fire on the MAIN
-    // thread (drained on the frame loop), so handlers can touch app state.
+    // Alternatively, hand the sim its own clock so it steps automatically and the
+    // physics stays stable independent of frame rate / hitches. Two flavours, same
+    // start/stop shape — from the caller's side they "just run" once started:
     //
-    // Web (wasm) has no background threads: async there transparently falls back
-    // to fixed-timestep stepping driven by the frame loop (events().update),
-    // logged once as a warning. Same API, no code change needed.
+    //   world.updateFixedStart(60);    // fixed 60 Hz, SYNCHRONOUS on the frame loop
+    //   world.updateAsyncStart(120);   // fixed 120 Hz, on a BACKGROUND thread
+    //
+    // updateFixedStart: hooks events().update and accumulates real frame time,
+    // stepping in exact 1/hz chunks on the MAIN thread. The physicsUpdate event
+    // (below) fires per step, so kinematic movers / per-step forces run in perfect
+    // lock-step with the sim. This is the one to use when something must move in
+    // sync with the fixed step.
+    //
+    // updateAsyncStart: steps on a background thread (native) so the sim keeps a
+    // steady rate even if rendering hitches. Body reads / force / velocity calls
+    // stay safe (serialized against the step); collision events still fire on the
+    // MAIN thread (drained on the frame loop). On web (no threads) it transparently
+    // falls back to frame-loop fixed stepping.
+    //
+    // The three drivers are mutually exclusive; starting one while another runs is
+    // ignored with a warning.
+    void updateFixedStart(float hz = 60.0f, int maxSteps = 8);
+    void updateFixedStop();
+    bool isFixedStepping() const;
+
     void updateAsyncStart(float hz = 120.0f);
     void updateAsyncStop();
     bool isAsync() const;
+
+    // Fired on the MAIN thread just BEFORE each sim step, with that step's dt — the
+    // one place to apply per-step inputs (move kinematic bodies, add forces) so they
+    // stay in lock-step with the sim, whatever the driver:
+    //   update(dt)        -> once per call, dt = the frame delta you passed
+    //   updateFixedStart  -> once per fixed step, dt = 1/hz
+    //   async (web)       -> once per fixed step, dt = 1/hz (frame-loop fallback)
+    //   async (native)    -> once per FRAME, dt = frame delta (steps run off-thread,
+    //                        so this is the best a main-thread mover can do)
+    // Listen with one handler; it works in every mode without branching:
+    //   listener = world.physicsUpdate.listen([](float dt){ /* moveKinematic ... */ });
+    tc::Event<float> physicsUpdate;
 
     // --- collision events ----------------------------------------------------
     // Fired on the MAIN thread (inside update(), or — in async mode — on the
@@ -338,6 +391,10 @@ private:
     void updateCharacters(float dt);
     // Drain worker-collected contacts and fire contactBegan/Ended (main thread).
     void dispatchContacts();
+    // One fixed step (+ fixedUpdate event); shared accumulator loop behind both
+    // updateFixed() and the updateFixedStart() frame-loop listener.
+    void  fixedStepOnce(float step);
+    float fixedTick(float realDt, float hz, int maxSteps);
 #ifdef __EMSCRIPTEN__
     void webAsyncTick();   // fixed-timestep step driven by the frame loop
 #else
