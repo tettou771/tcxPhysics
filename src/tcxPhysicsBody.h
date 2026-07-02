@@ -3,7 +3,7 @@
 #include <TrussC.h>
 #include <cstdint>
 
-namespace tcx {
+namespace tcx::physics {
 
 class PhysicsWorld;
 enum class MotionType;   // defined in tcxPhysicsWorld.h (Static / Kinematic / Dynamic)
@@ -120,4 +120,14 @@ private:
     uint32_t id_ = kInvalidId;
 };
 
-} // namespace tcx
+} // namespace tcx::physics
+
+// -----------------------------------------------------------------------------
+// Backward compatibility. The canonical namespace is now `tcx::physics`. These
+// silent aliases keep older code compiling: flat `tcx::PhysicsBody` and legacy
+// `tc::PhysicsBody` / `trussc::PhysicsBody`. DEPRECATED — removed in v1.0.0.
+// (No [[deprecated]] attribute: under the usual `using namespace tc;` it would
+//  warn on idiomatic unqualified use too. See tcxPhysics README for migration.)
+// -----------------------------------------------------------------------------
+namespace tcx    { using physics::PhysicsBody; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::PhysicsBody; } // deprecated: remove at v1.0.0

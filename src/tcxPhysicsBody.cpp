@@ -4,7 +4,7 @@
 // PhysicsBody is a thin handle: every accessor just forwards to the world, which
 // owns the Jolt simulation. No Jolt headers needed here.
 
-namespace tcx {
+namespace tcx::physics {
 
 tc::Vec3 PhysicsBody::getPosition() const {
     if (!isValid()) return tc::Vec3();
@@ -220,4 +220,4 @@ bool PhysicsBody::isActive() const {
     return world_->isBodyActive(id_);
 }
 
-} // namespace tcx
+} // namespace tcx::physics

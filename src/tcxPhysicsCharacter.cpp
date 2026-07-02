@@ -4,7 +4,7 @@
 // PhysicsCharacter is a thin handle: every accessor forwards to the world,
 // which owns the Jolt CharacterVirtual. No Jolt headers here.
 
-namespace tcx {
+namespace tcx::physics {
 
 bool PhysicsCharacter::isValid() const {
     return worldOk() && world_->hasCharacter(id_);
@@ -48,4 +48,4 @@ tc::Vec3 PhysicsCharacter::getLinearVelocity() const {
     return world_->getCharacterLinearVelocity(id_);
 }
 
-} // namespace tcx
+} // namespace tcx::physics

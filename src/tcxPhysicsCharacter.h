@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <memory>
 
-namespace tcx {
+namespace tcx::physics {
 
 class PhysicsWorld;
 
@@ -57,4 +57,14 @@ private:
     std::weak_ptr<int> worldAlive_;
 };
 
-} // namespace tcx
+} // namespace tcx::physics
+
+// -----------------------------------------------------------------------------
+// Backward compatibility. The canonical namespace is now `tcx::physics`. These
+// silent aliases keep older code compiling: flat `tcx::PhysicsCharacter` and legacy
+// `tc::PhysicsCharacter` / `trussc::PhysicsCharacter`. DEPRECATED — removed in v1.0.0.
+// (No [[deprecated]] attribute: under the usual `using namespace tc;` it would
+//  warn on idiomatic unqualified use too. See tcxPhysics README for migration.)
+// -----------------------------------------------------------------------------
+namespace tcx    { using physics::PhysicsCharacter; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::PhysicsCharacter; } // deprecated: remove at v1.0.0

@@ -28,7 +28,7 @@
 #include <TrussC.h>   // tc::Mod, tc::Node, createBox/Sphere/Capsule/Cylinder, Material
 #include <unordered_map>
 
-namespace tcx {
+namespace tcx::physics {
 
 // What the body is made of.
 struct ColliderShape {
@@ -617,4 +617,30 @@ private:
     tc::Material material_;
 };
 
-} // namespace tcx
+} // namespace tcx::physics
+
+// -----------------------------------------------------------------------------
+// Backward compatibility. The canonical namespace is now `tcx::physics`. These
+// silent aliases keep older code compiling: flat `tcx::RigidBody` and legacy
+// `tc::RigidBody` / `trussc::RigidBody`. DEPRECATED — removed in v1.0.0.
+// (No [[deprecated]] attribute: under the usual `using namespace tc;` it would
+//  warn on idiomatic unqualified use too. See tcxPhysics README for migration.)
+// -----------------------------------------------------------------------------
+namespace tcx    { using physics::ColliderShape; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::ColliderShape; } // deprecated: remove at v1.0.0
+namespace tcx    { using physics::BodyType; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::BodyType; } // deprecated: remove at v1.0.0
+namespace tcx    { using physics::setDefaultWorld; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::setDefaultWorld; } // deprecated: remove at v1.0.0
+namespace tcx    { using physics::defaultWorld; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::defaultWorld; } // deprecated: remove at v1.0.0
+namespace tcx    { using physics::buildShapeMesh; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::buildShapeMesh; } // deprecated: remove at v1.0.0
+namespace tcx    { using physics::Collision; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::Collision; } // deprecated: remove at v1.0.0
+namespace tcx    { using physics::RigidBody; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::RigidBody; } // deprecated: remove at v1.0.0
+namespace tcx    { using physics::CharacterBody; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::CharacterBody; } // deprecated: remove at v1.0.0
+namespace tcx    { using physics::ColliderRenderer; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::ColliderRenderer; } // deprecated: remove at v1.0.0

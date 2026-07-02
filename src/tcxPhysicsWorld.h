@@ -8,7 +8,7 @@
 #include "tcxPhysicsJoint.h"
 #include "tcxPhysicsCharacter.h"
 
-namespace tcx {
+namespace tcx::physics {
 
 // =============================================================================
 // ContactEventArgs - payload for PhysicsWorld::contactBegan / contactEnded.
@@ -405,4 +405,20 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace tcx
+} // namespace tcx::physics
+
+// -----------------------------------------------------------------------------
+// Backward compatibility. The canonical namespace is now `tcx::physics`. These
+// silent aliases keep older code compiling: flat `tcx::PhysicsWorld` and legacy
+// `tc::PhysicsWorld` / `trussc::PhysicsWorld`. DEPRECATED — removed in v1.0.0.
+// (No [[deprecated]] attribute: under the usual `using namespace tc;` it would
+//  warn on idiomatic unqualified use too. See tcxPhysics README for migration.)
+// -----------------------------------------------------------------------------
+namespace tcx    { using physics::ContactEventArgs; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::ContactEventArgs; } // deprecated: remove at v1.0.0
+namespace tcx    { using physics::MotionType; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::MotionType; } // deprecated: remove at v1.0.0
+namespace tcx    { using physics::RaycastHit; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::RaycastHit; } // deprecated: remove at v1.0.0
+namespace tcx    { using physics::PhysicsWorld; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::PhysicsWorld; } // deprecated: remove at v1.0.0

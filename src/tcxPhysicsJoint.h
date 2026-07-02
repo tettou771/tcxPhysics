@@ -5,7 +5,7 @@
 #include <memory>
 #include "tcxPhysicsBody.h"
 
-namespace tcx {
+namespace tcx::physics {
 
 class PhysicsWorld;
 
@@ -187,4 +187,20 @@ private:
     std::weak_ptr<int> worldAlive_;
 };
 
-} // namespace tcx
+} // namespace tcx::physics
+
+// -----------------------------------------------------------------------------
+// Backward compatibility. The canonical namespace is now `tcx::physics`. These
+// silent aliases keep older code compiling: flat `tcx::Joint` and legacy
+// `tc::Joint` / `trussc::Joint`. DEPRECATED — removed in v1.0.0.
+// (No [[deprecated]] attribute: under the usual `using namespace tc;` it would
+//  warn on idiomatic unqualified use too. See tcxPhysics README for migration.)
+// -----------------------------------------------------------------------------
+namespace tcx    { using physics::JointType; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::JointType; } // deprecated: remove at v1.0.0
+namespace tcx    { using physics::Joint; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::Joint; } // deprecated: remove at v1.0.0
+namespace tcx    { using physics::JointBreakEventArgs; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::JointBreakEventArgs; } // deprecated: remove at v1.0.0
+namespace tcx    { using physics::PhysicsJoint; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::PhysicsJoint; } // deprecated: remove at v1.0.0

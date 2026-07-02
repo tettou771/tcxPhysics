@@ -61,7 +61,7 @@ JPH_SUPPRESS_WARNINGS
 using namespace std;
 using namespace tc;
 
-namespace tcx {
+namespace tcx::physics {
 
 // ---------------------------------------------------------------------------
 // Jolt boilerplate (object/broadphase layers, global init) — all internal.
@@ -1937,4 +1937,4 @@ void* PhysicsWorld::nativeBodyInterface() const {
     return impl_->initialized ? static_cast<void*>(&impl_->bodies()) : nullptr;
 }
 
-} // namespace tcx
+} // namespace tcx::physics

@@ -4,7 +4,7 @@
 // PhysicsJoint is a thin handle: every accessor forwards to the world, which
 // owns the joint registry and the Jolt constraints. No Jolt headers here.
 
-namespace tcx {
+namespace tcx::physics {
 
 bool PhysicsJoint::isValid() const {
     return worldOk() && world_->hasJoint(id_);
@@ -76,4 +76,4 @@ void PhysicsJoint::drawWire(const tc::Color& color) const {
     }
 }
 
-} // namespace tcx
+} // namespace tcx::physics

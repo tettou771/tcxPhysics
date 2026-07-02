@@ -38,7 +38,7 @@
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Body/BodyID.h>
 
-namespace tcx {
+namespace tcx::physics {
 
 // The whole Jolt simulation. Use it to add constraints, run queries
 // (NarrowPhaseQuery / BroadPhaseQuery), tweak PhysicsSettings, etc.
@@ -56,4 +56,18 @@ inline JPH::BodyID joltBodyId(const PhysicsBody& body) {
     return JPH::BodyID(body.getId());
 }
 
-} // namespace tcx
+} // namespace tcx::physics
+
+// -----------------------------------------------------------------------------
+// Backward compatibility. The canonical namespace is now `tcx::physics`. These
+// silent aliases keep older code compiling: flat `tcx::joltSystem` and legacy
+// `tc::joltSystem` / `trussc::joltSystem`. DEPRECATED — removed in v1.0.0.
+// (No [[deprecated]] attribute: under the usual `using namespace tc;` it would
+//  warn on idiomatic unqualified use too. See tcxPhysics README for migration.)
+// -----------------------------------------------------------------------------
+namespace tcx    { using physics::joltSystem; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::joltSystem; } // deprecated: remove at v1.0.0
+namespace tcx    { using physics::joltBodyInterface; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::joltBodyInterface; } // deprecated: remove at v1.0.0
+namespace tcx    { using physics::joltBodyId; } // deprecated: remove at v1.0.0
+namespace trussc { using tcx::physics::joltBodyId; } // deprecated: remove at v1.0.0
